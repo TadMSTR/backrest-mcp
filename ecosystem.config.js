@@ -17,7 +17,7 @@
 module.exports = {
   apps: [{
     name: 'backrest-mcp',
-    script: 'python3',
+    script: '.venv/bin/python3',
     args: ['-m', 'backrest_mcp.server'],
     cwd: '/home/ted/repos/personal/backrest-mcp',
     interpreter: 'none',
