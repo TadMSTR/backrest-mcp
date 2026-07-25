@@ -145,3 +145,29 @@ async def test_post_streaming_request_is_enveloped():
     assert flag == 0
     assert length == len(body) - 5
     assert json.loads(body[5:]) == {"ref": "t-1"}
+
+
+async def test_post_streaming_malformed_frame_raises():
+    """A frame whose declared length overruns the buffer raises, not silent-truncates."""
+    # Declares a 100-byte frame but only 5 bytes follow.
+    stream = struct.pack(">BI", 0, 100) + b"short"
+    with respx.mock() as mock:
+        mock.post(f"{BASE_URL}/v1.Backrest/GetLogs").mock(
+            return_value=httpx.Response(200, content=stream)
+        )
+        client = BackrestClient(BASE_URL)
+        with pytest.raises(BackrestStreamError, match="declared length exceeds"):
+            await client.post_streaming("GetLogs", {"ref": "t-bad"})
+
+
+async def test_post_streaming_size_cap_enforced(monkeypatch):
+    """A response exceeding the buffered-stream cap raises BackrestStreamError."""
+    monkeypatch.setattr("backrest_mcp.client._MAX_STREAM_BYTES", 4)
+    stream = _bytesvalue_frame("this is well over four bytes") + _frame(b"{}", end=True)
+    with respx.mock() as mock:
+        mock.post(f"{BASE_URL}/v1.Backrest/GetLogs").mock(
+            return_value=httpx.Response(200, content=stream)
+        )
+        client = BackrestClient(BASE_URL)
+        with pytest.raises(BackrestStreamError, match="exceeded"):
+            await client.post_streaming("GetLogs", {"ref": "t-big"})

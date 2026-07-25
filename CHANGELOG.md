@@ -52,6 +52,13 @@ not upstream `main` (which has since diverged).
 - `mcp.run(transport="stdio")` → `mcp.run()` so the transport is FastMCP-configurable.
 - Coverage raised to ~83% (from 57%).
 
+### Security
+
+- **Connect-stream decoder hardening** (audit `backrest-mcp-modernization-2026-07`, Low) —
+  `post_streaming` now bounds the buffered response at 64 MiB, and `_decode_connect_stream`
+  raises `BackrestStreamError` on a frame whose declared length overruns the buffer instead
+  of silently returning a truncated log body.
+
 ### Explicitly excluded
 
 - `RunCommand`, `SetConfig`, `AddRepo`, `RemoveRepo`, `ClearHistory` remain unregistered.

@@ -28,6 +28,11 @@ log = structlog.get_logger(__name__)
 # Connect streaming envelope flags (1-byte prefix on each frame).
 _FLAG_END_STREAM = 0b00000010
 
+# Hard cap on a buffered streaming response. GetLogs targets the local trusted Backrest
+# instance, but this bounds self-inflicted memory use if the log stream is very large or
+# Backrest misbehaves, before the per-call `max_bytes` truncation one layer up applies.
+_MAX_STREAM_BYTES = 64 * 1024 * 1024  # 64 MiB
+
 
 class BackrestStreamError(RuntimeError):
     """Raised when a Connect streaming RPC ends with an error frame."""
@@ -63,14 +68,21 @@ class BackrestClient:
         msg = json.dumps(body).encode()
         envelope = struct.pack(">BI", 0, len(msg)) + msg
         async with httpx.AsyncClient(auth=self._auth, timeout=120.0) as client:
-            r = await client.post(
+            async with client.stream(
+                "POST",
                 url,
                 content=envelope,
                 headers={"content-type": "application/connect+json"},
-            )
-            r.raise_for_status()
-            data = r.content
-        return _decode_connect_stream(data)
+            ) as r:
+                r.raise_for_status()
+                buf = bytearray()
+                async for chunk in r.aiter_bytes():
+                    buf += chunk
+                    if len(buf) > _MAX_STREAM_BYTES:
+                        raise BackrestStreamError(
+                            f"streaming response exceeded {_MAX_STREAM_BYTES}-byte cap"
+                        )
+        return _decode_connect_stream(bytes(buf))
 
 
 def _decode_connect_stream(data: bytes) -> bytes:
@@ -81,6 +93,12 @@ def _decode_connect_stream(data: bytes) -> bytes:
     while i + 5 <= n:
         flag = data[i]
         length = struct.unpack(">I", data[i + 1 : i + 5])[0]
+        if i + 5 + length > n:
+            # Declared frame length runs past the buffer: a truncated/malformed
+            # response. Surface it rather than silently returning a short frame.
+            raise BackrestStreamError(
+                "malformed Connect frame: declared length exceeds remaining buffer"
+            )
         frame = data[i + 5 : i + 5 + length]
         i += 5 + length
         if flag & _FLAG_END_STREAM:
