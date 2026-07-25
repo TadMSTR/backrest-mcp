@@ -9,3 +9,7 @@ venv/
 *.log
 core.*
 *.core
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
