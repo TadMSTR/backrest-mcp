@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import json
 import sys
-from pathlib import Path
 
 import httpx
 import pytest
 import respx
 
 BASE_URL = "http://localhost:9898"
+
+
+def _body(route):
+    return json.loads(route.calls[0].request.content)
 
 
 def _reload_server(monkeypatch, readonly="true", destructive="false", restore_prefix=None):
@@ -183,6 +186,55 @@ async def test_restore_valid_target_calls_api(monkeypatch, tmp_path):
             "target": str(restore_prefix / "docs"),
         })
         assert restore_route.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Write tool happy paths (BACKREST_READONLY=false)
+# ---------------------------------------------------------------------------
+
+async def test_trigger_backup_calls_api(monkeypatch):
+    mcp = _reload_server(monkeypatch, readonly="false")
+    with respx.mock() as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/Backup").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        await mcp.call_tool("trigger_backup", {"plan_id": "forge-system", "dry_run": True})
+    body = _body(route)
+    assert body["value"] == "forge-system"
+    assert body["dryRun"] is True
+
+
+async def test_do_repo_task_maps_task_enum(monkeypatch):
+    mcp = _reload_server(monkeypatch, readonly="false")
+    with respx.mock() as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/DoRepoTask").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        await mcp.call_tool("do_repo_task", {"repo_id": "atlas-forge", "task": "prune"})
+    body = _body(route)
+    assert body["repoId"] == "atlas-forge"
+    assert body["task"] == 2  # TASK_PRUNE
+
+
+async def test_cancel_operation_calls_api(monkeypatch):
+    mcp = _reload_server(monkeypatch, readonly="false")
+    with respx.mock() as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/Cancel").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        await mcp.call_tool("cancel_operation", {"operation_id": "396"})
+    assert _body(route)["value"] == "396"
+
+
+async def test_trigger_backup_invalid_plan_rejected(monkeypatch):
+    mcp = _reload_server(monkeypatch, readonly="false")
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/Backup").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        result = await mcp.call_tool("trigger_backup", {"plan_id": "bad;rm -rf"})
+    assert route.call_count == 0
+    assert "error" in result.content[0].text
 
 
 # ---------------------------------------------------------------------------

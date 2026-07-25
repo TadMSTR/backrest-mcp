@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.3.0] — 2026-07-25
+
+Reconciled the mock-only v0.2.1 against the **deployed Backrest v1.13.0** connect-rpc API
+(forge `:9898`). The prior release was written and tested entirely against hand-mocked
+JSON and had never been run against a live Backrest; several field-name mismatches only
+surface against the real API. Field names in this release target the **deployed** version,
+not upstream `main` (which has since diverged).
+
+### Fixed
+
+- **Broken standalone entrypoint** — added the missing `if __name__ == "__main__": main()`
+  guard. `python -m backrest_mcp.server` (used by PM2 and the Claude Desktop snippet) was a
+  silent no-op: it imported the module and exited without starting the server.
+- **`get_summary` failed-count field** — model used `backupsFailedLast30days`; the API field
+  is `backupsFailed30days`, so failed-backup counts always rendered as absent. Corrected and
+  added `backupsWarningLast30days`, `bytesScannedLast30days`, and the byte-average fields.
+- **`get_operations` repo filter** — the operation selector keyed on `repoId`, but
+  `OpSelector` matches on `repoGuid`, so repo filtering was silently ignored. `repo_id` is
+  now resolved to its GUID. Also: with no filter, GetOperations returns nothing, so the tool
+  now fans out across all configured repos.
+- **`list_snapshots()` with no arguments** returned HTTP 500 (empty `repo_id` rejected). It
+  now enumerates configured repos and merges results, tagging each snapshot with its
+  `repoId`. (Backrest #223)
+- **Stale server instructions** — the FastMCP `instructions=` text claiming Backrest was "not
+  yet deployed" was rewritten for the live deployment.
+
+### Added
+
+- **`get_health`** — wraps GetConfig; returns `ok` / `auth_failed` / `unreachable` plus the
+  configured URL and repo/plan counts. Safe to poll. (Backrest #222)
+- **`get_logs`** — reads an operation's log output over the Connect server-streaming
+  protocol (the primary tool for diagnosing a failed backup). The log reference is surfaced
+  by `get_operations` so an agent can chain `get_operations` → `get_logs`.
+- **`get_download_url`** — signed download URL for a file from a restore operation.
+- **HTTP/PM2 transport** — `BACKREST_MCP_TRANSPORT=http` runs a long-lived streamable-http
+  service (loopback-only bind, mandatory `StaticTokenVerifier` bearer token). `main()` fails
+  closed on a non-loopback bind or a missing/short token. `stdio` remains the default.
+- **Live conformance tests** (`tests/test_live_conformance.py`, gated by `BACKREST_LIVE_TEST=1`
+  so CI stays hermetic) that exercise the real `:9898` API.
+- **CI** (`.github/workflows/ci.yml`: ruff + pytest matrix on 3.11/3.12/3.13), ruff config,
+  and `otel` / `nats` optional-dependency extras.
+
+### Changed
+
+- **`list_snapshot_files` argument `repo_guid` → `repo_id`.** The tool now accepts the human
+  repo ID (consistent with every other tool) and resolves it to the GUID internally. NOTE:
+  the underlying v1.13.0 `ListSnapshotFilesRequest` field is `repo_guid` and is looked up by
+  GUID — the v0.2.1 code sending `repoGuid` was already correct against the deployed version;
+  only the exposed argument name and internal resolution changed.
+- `mcp.run(transport="stdio")` → `mcp.run()` so the transport is FastMCP-configurable.
+- Coverage raised to ~83% (from 57%).
+
+### Security
+
+- **Connect-stream decoder hardening** (audit `backrest-mcp-modernization-2026-07`, Low) —
+  `post_streaming` now bounds the buffered response at 64 MiB, and `_decode_connect_stream`
+  raises `BackrestStreamError` on a frame whose declared length overruns the buffer instead
+  of silently returning a truncated log body.
+
+### Explicitly excluded
+
+- `RunCommand`, `SetConfig`, `AddRepo`, `RemoveRepo`, `ClearHistory` remain unregistered.
+
 ## [0.2.1] — 2026-06-04
 
 ### Security

@@ -8,18 +8,26 @@ Python/FastMCP rewrite of `backrest-mcp-server`. Covers the full useful surface 
 
 | Tool | Description | Requires |
 |------|-------------|---------|
+| `get_health` | Check reachability + credential health (poll-safe) | — |
 | `get_config` | Read Backrest configuration (repos, plans) | — |
-| `list_snapshots` | List snapshots, optionally filtered by repo or plan | — |
-| `list_snapshot_files` | Browse files within a snapshot | — |
+| `list_snapshots` | List snapshots; no args → all repos merged | — |
+| `list_snapshot_files` | Browse files within a snapshot (by `repo_id`) | — |
 | `get_summary` | 30-day dashboard stats per repo and plan | — |
-| `get_operations` | Recent operation history with status icons | — |
+| `get_operations` | Recent operation history with status icons + log refs | — |
+| `get_logs` | Read an operation's log output (ref from `get_operations`) | — |
+| `get_download_url` | Signed download URL for a restored file | — |
 | `trigger_backup` | Trigger a backup plan (dry_run supported) | `BACKREST_READONLY=false` |
 | `do_repo_task` | Run maintenance: prune/check/stats/unlock/index | `BACKREST_READONLY=false` |
 | `cancel_operation` | Cancel a running operation | `BACKREST_READONLY=false` |
 | `forget_snapshot` | Permanently forget a snapshot (confirm token required) | `BACKREST_ALLOW_DESTRUCTIVE=true` |
 | `restore_snapshot` | Restore snapshot to a staging path | `BACKREST_ALLOW_DESTRUCTIVE=true` |
 
-Default state: **read-only** — only the top 5 tools are registered. No write calls are possible without explicit opt-in.
+Default state: **read-only** — only the 8 read tools are registered. No write calls are
+possible without explicit opt-in. `RunCommand`, `SetConfig`, `AddRepo`, `RemoveRepo`, and
+`ClearHistory` are intentionally never exposed.
+
+> API field names target the **deployed Backrest v1.13.0** connect-rpc API, which upstream
+> `main` has since diverged from. See `CHANGELOG.md` (0.3.0) for the reconciliation notes.
 
 ## Safety Controls
 
@@ -61,6 +69,10 @@ Set `BACKREST_AUDIT_LOG=/path/to/audit.jsonl` to log all write operations. Crede
 | `BACKREST_ALLOW_DESTRUCTIVE` | `false` | Enable forget/restore (requires READONLY=false) |
 | `BACKREST_RESTORE_ALLOWED_PREFIX` | `/tmp/backrest-restore/` | Restore target path guard |
 | `BACKREST_AUDIT_LOG` | — | JSONL audit log for write ops |
+| `BACKREST_MCP_TRANSPORT` | `stdio` | `stdio` or `http` (long-lived PM2 service) |
+| `BACKREST_MCP_HTTP_HOST` | `127.0.0.1` | Bind host for http mode (non-loopback refused) |
+| `BACKREST_MCP_HTTP_PORT` | `8626` | Bind port for http mode |
+| `BACKREST_MCP_AUTH_TOKEN` | — | Bearer token, **required** in http mode (≥16 chars) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `LOG_FILE` | stderr | Log file path |
 | `INFLUXDB_URL` | — | Optional InfluxDB metrics |
@@ -89,11 +101,21 @@ cd /path/to/backrest-mcp
 pm2 start ecosystem.config.js --env-file /path/to/secrets.env
 ```
 
-The secrets file must contain `BACKREST_USERNAME` and `BACKREST_PASSWORD`. All other settings
-default safely in `ecosystem.config.js` (`BACKREST_READONLY=true`, `BACKREST_ALLOW_DESTRUCTIVE=false`).
+The secrets file must contain `BACKREST_USERNAME`, `BACKREST_PASSWORD`, and (for http mode)
+`BACKREST_MCP_AUTH_TOKEN`. All other settings default safely in `ecosystem.config.js`
+(`BACKREST_READONLY=true`, `BACKREST_ALLOW_DESTRUCTIVE=false`).
 
-The server runs in stdio mode via the `backrest-mcp` entry point. To expose over HTTP,
-use a FastMCP HTTP wrapper or proxy.
+### HTTP transport
+
+`ecosystem.config.js` defaults to `BACKREST_MCP_TRANSPORT=http`, running a long-lived
+streamable-http service on `127.0.0.1:8626/mcp`. HTTP mode **fails closed**:
+
+- binds loopback only (non-loopback bind refused unless `BACKREST_MCP_ALLOW_NONLOOPBACK=1`);
+- requires a `BACKREST_MCP_AUTH_TOKEN` bearer token of ≥16 chars (generate with
+  `python3 -c "import secrets; print(secrets.token_hex(32))"`).
+
+Clients authenticate with `Authorization: Bearer <token>`. Set `BACKREST_MCP_TRANSPORT=stdio`
+(or unset it) to fall back to per-turn stdio via the `backrest-mcp` entry point.
 
 ## Claude Desktop Config
 
