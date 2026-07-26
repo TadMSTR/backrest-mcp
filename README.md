@@ -160,7 +160,7 @@ Optional InfluxDB metrics via `pip install -e ".[influxdb]"`:
 | `INFLUXDB_URL` | InfluxDB write URL |
 | `INFLUXDB_TOKEN` | Auth token |
 | `INFLUXDB_ORG` | Organization |
-| `INFLUXDB_BUCKET` | Bucket (default: `backrest`) |
+| `INFLUXDB_BUCKET` | Bucket (default: `backrest-mcp`) |
 
 Each tool call emits a `backrest_tool` measurement with `tool` tag and `duration_ms` field.
 
