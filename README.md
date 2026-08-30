@@ -151,7 +151,12 @@ httpx respects this env var. Do **not** disable TLS verification.
 ## Observability
 
 Structured JSON logs via structlog. `LOG_LEVEL` controls verbosity (default: INFO). Set
-`LOG_FILE` to write to a file instead of stderr.
+`LOG_FILE` to write to a file **instead of** stderr — exactly one sink is attached, so under
+PM2 the same line is not also duplicated into `error_file`. If `LOG_FILE` cannot be created
+the server falls back to stderr and says so on stderr rather than failing to start.
+
+`LOG_LEVEL` applies to this server's own loggers. `httpx`, `httpcore`, `mcp` and `nats` are
+held at WARNING regardless, so their wire trace cannot drown the server's own lines.
 
 Optional InfluxDB metrics via `pip install -e ".[influxdb]"`:
 
@@ -159,10 +164,37 @@ Optional InfluxDB metrics via `pip install -e ".[influxdb]"`:
 |---------|---------|
 | `INFLUXDB_URL` | InfluxDB write URL |
 | `INFLUXDB_TOKEN` | Auth token |
-| `INFLUXDB_ORG` | Organization |
-| `INFLUXDB_BUCKET` | Bucket (default: `backrest-mcp`) |
+| `INFLUXDB_BUCKET` | Bucket/database (default: `backrest-mcp`) |
+
+Optional NATS publishing via `pip install -e ".[nats]"`:
+
+| Env var | Purpose |
+|---------|---------|
+| `NATS_URL` | NATS server URL. Unset = disabled. |
+| `NATS_SUBJECT_PREFIX` | Subject prefix (default: `backrest`); subjects are `<prefix>.tool.<tool>` |
 
 Each tool call emits a `backrest_tool` measurement with `tool` tag and `duration_ms` field.
+
+### Failure behaviour
+
+Telemetry is best-effort and never fails a tool call, but it is **not silent**. An unset env
+var is the intended disabled state and logs nothing. A backend that is *configured and
+failing* warns exactly once per process and is then not retried:
+
+| Event | Meaning |
+|-------|---------|
+| `influx_init_failed` | `INFLUXDB_URL` set but the client could not be built. Writes disabled for the process. |
+| `influx_write_failed` | The client built but a write failed — the usual symptom of a wrong or unreachable URL, since `InfluxDBClient3` connects lazily. Writes keep being attempted. |
+| `nats_init_failed` | `NATS_URL` set but the connection failed. Publishes disabled for the process. |
+| `nats_transport_error` | First NATS transport error, in place of nats-py's per-attempt ERROR reporting. |
+| `nats_publish_failed` | The connection succeeded but a publish failed. Publishes keep being attempted. |
+
+Every one of these carries the exception *class* only, never the URL or token — a NATS URL
+embeds its credentials.
+
+NATS connects fail fast (`allow_reconnect=False`, two attempts, 2 s connect timeout, 5 s
+overall deadline) so an unreachable broker delays a tool call by well under a second rather
+than the ~120 s the library defaults produce.
 
 ## Auth Architecture
 
