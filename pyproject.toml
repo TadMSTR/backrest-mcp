@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "backrest-mcp"
-version = "0.4.1"
+version = "0.5.0"
 description = "FastMCP Python MCP server wrapping the Backrest backup manager REST API"
 requires-python = ">=3.11"
 # BOUNDED RANGES, NOT BARE FLOORS (`ships`: repo-standards' Dependencies block). Floors are
@@ -53,3 +53,13 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.coverage.report]
+# COVERAGE FLOOR — B9/F8, set to the measurement.
+#
+# Measured 96.18% on 2026-10-20 for v0.5.0 (242 passed, 10 skipped; the skips are the live
+# file, which needs a real Backrest and runs via scripts/run_live_conformance.py).
+# Floor = measured whole number; ratchet up, never down. If coverage falls, test the new
+# code, or explain the drop in CHANGELOG.md.
+fail_under = 96
+show_missing = true

@@ -14,6 +14,9 @@ Python/FastMCP rewrite of `backrest-mcp-server`. Covers the full useful surface 
 |------|-------------|---------|
 | `get_health` | Check reachability + credential health (poll-safe) | — |
 | `get_config` | Read a secret-free projection of the Backrest configuration (repos, plans) | — |
+| `list_plans` | Each plan's paths, excludes, repo, schedule and retention (secret-free) | — |
+| `find_plan_for_path` | Which plans cover an absolute path, and which exclude pattern drops it (approximate restic matching) | — |
+| `get_backup_freshness` | Per plan: last good backup, age, latest status, stale / ok / unscheduled | — |
 | `list_snapshots` | List snapshots; no args → all repos merged | — |
 | `list_snapshot_files` | Browse files within a snapshot (by `repo_id`) | — |
 | `get_summary` | 30-day dashboard stats per repo and plan | — |
@@ -21,14 +24,18 @@ Python/FastMCP rewrite of `backrest-mcp-server`. Covers the full useful surface 
 | `get_logs` | Read an operation's log output (ref from `get_operations`) | — |
 | `get_download_url` | Signed download URL for a restored file | — |
 | `trigger_backup` | Trigger a backup plan (dry_run supported) | `BACKREST_READONLY=false` |
-| `do_repo_task` | Run maintenance: prune/check/stats/unlock/index | `BACKREST_READONLY=false` |
+| `do_repo_task` | Run maintenance: index (re-index snapshots)/prune/check/stats/unlock/forget | `BACKREST_READONLY=false` |
 | `cancel_operation` | Cancel a running operation | `BACKREST_READONLY=false` |
 | `forget_snapshot` | Permanently forget a snapshot (confirm token required) | `BACKREST_ALLOW_DESTRUCTIVE=true` |
 | `restore_snapshot` | Restore snapshot to a staging path | `BACKREST_ALLOW_DESTRUCTIVE=true` |
 
-Default state: **read-only** — only the 8 read tools are registered. No write calls are
+Default state: **read-only** — only the 11 read tools are registered. No write calls are
 possible without explicit opt-in. `RunCommand`, `SetConfig`, `AddRepo`, `RemoveRepo`, and
 `ClearHistory` are intentionally never exposed.
+
+For "is this path backed up?" use `find_plan_for_path`; for "is anything stale?" use
+`get_backup_freshness`. Both read the same secret-free projection as `get_config`, so they
+never see a repo password.
 
 > API field names target the **deployed Backrest v1.13.0** connect-rpc API, which upstream
 > `main` has since diverged from. See `CHANGELOG.md` (0.3.0) for the reconciliation notes.
@@ -89,23 +96,29 @@ source .venv/bin/activate
 pip install -e .
 ```
 
-For development/testing:
+For development/testing, install the locked set CI uses:
 ```bash
-pip install -e ".[dev]"
-pytest
+uv sync --frozen --extra dev
+uv run --frozen --no-sync pytest --cov=backrest_mcp
 ```
+
+The live conformance tests run against a real Backrest. `scripts/run_live_conformance.py`
+reads `BACKREST_*` from the file named by `BACKREST_LIVE_ENV_FILE` (default
+`~/.secrets/forge.env`) inside the process, so no credential is ever on a command line. It
+exits non-zero if any live test fails or if every test skipped.
 
 ## Deployment (PM2)
 
-An `ecosystem.config.js` is included for PM2-managed deployment. Credentials are injected
-via `--env-file` to avoid storing them in the config file:
+An `ecosystem.config.js` is included for PM2-managed deployment. It reads credentials from
+`~/.secrets/forge.env` itself when PM2 loads it (PM2 6.x has no `--env-file` flag), so none
+are stored in the config file:
 
 ```bash
 cd /path/to/backrest-mcp
-pm2 start ecosystem.config.js --env-file /path/to/secrets.env
+pm2 start ecosystem.config.js
 ```
 
-The secrets file must contain `BACKREST_USERNAME`, `BACKREST_PASSWORD`, and (for http mode)
+The env file must contain `BACKREST_USERNAME`, `BACKREST_PASSWORD`, and (for http mode)
 `BACKREST_MCP_AUTH_TOKEN`. All other settings default safely in `ecosystem.config.js`
 (`BACKREST_READONLY=true`, `BACKREST_ALLOW_DESTRUCTIVE=false`).
 
