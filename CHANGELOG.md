@@ -14,7 +14,10 @@
   `backrest_mcp/redact.py`. Unknown keys are dropped by construction, so a secret field a
   future Backrest adds is never returned. Secret-bearing fields are replaced by safe
   summaries: `envKeys` (names only), `hasPassword`, `flagCount`, `backupFlagCount`, and
-  each hook's action *type*.
+  each hook's action *type*. Repo URIs lose `user:password@` userinfo and any query
+  string. A non-URL URI containing `=`, such as restic's `rclone:` backend with an inline
+  rclone connection string (`access_key_id=…,secret_access_key=…`), is redacted after its
+  backend prefix.
   Operators who called `get_config` on an earlier version should treat the repo password
   as disclosed to that session's transcript and any LLM tracing.
 - **`restore_snapshot` checked `realpath(target)` but sent the raw `target`.** A symlink

@@ -81,21 +81,38 @@ def strip_userinfo(uri: str) -> str:
     the URI does (for example a password containing an unencoded ``/``), the boundary is
     ambiguous, so everything after ``://`` is replaced with ``[REDACTED]``. This fails safe.
 
-    URIs without ``://`` are returned unchanged: local paths (``/mnt/…``) and restic's short
-    ``sftp:user@host:/path`` form. In the short sftp form, ``user`` is an SSH login name, not
-    a secret. SFTP cannot carry a password in the URI; authentication is by SSH key or agent.
+    A query string or fragment on a URL-shaped URI is replaced with ``?[REDACTED]``, since
+    tokens are sometimes passed there.
+
+    A URI without ``://`` that contains ``=`` is redacted after its backend prefix. This
+    catches restic's ``rclone:`` backend with an inline rclone connection string
+    (``rclone::s3,access_key_id=…,secret_access_key=…:bucket``), which carries credentials
+    and has no ``://``.
+
+    Other URIs without ``://`` are returned unchanged: local paths (``/mnt/…``) and restic's
+    short ``sftp:user@host:/path`` form. In the short sftp form, ``user`` is an SSH login
+    name, not a secret. SFTP cannot carry a password in the URI; authentication is by SSH
+    key or agent.
     """
-    if not uri or "://" not in uri:
+    if not uri:
         return uri
+    if "://" not in uri:
+        if "=" not in uri:
+            return uri
+        head, sep, _ = uri.partition(":")
+        return f"{head}:{REDACTED}" if sep and head and "/" not in head else REDACTED
     prefix, rest = uri.split("://", 1)
     prefix += "://"
+    for mark in ("?", "#"):
+        if mark in rest:
+            rest = rest.split(mark, 1)[0] + "?" + REDACTED
     slash = rest.find("/")
     authority, path = (rest, "") if slash == -1 else (rest[:slash], rest[slash:])
     if "@" in authority:
         return prefix + authority.rsplit("@", 1)[1] + path
     if "@" in path:
         return prefix + REDACTED
-    return uri
+    return prefix + rest
 
 
 def project_hook(hook: dict) -> dict:

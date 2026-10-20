@@ -18,6 +18,13 @@ from backrest_mcp.redact import project_config, project_hook, project_repo, stri
         ("rest:https://h/repo", "rest:https://h/repo"),
         ("/mnt/atlas/forge/backups/restic", "/mnt/atlas/forge/backups/restic"),
         ("sftp:u@h:/p", "sftp:u@h:/p"),
+        ("rclone:myremote:bucket/path", "rclone:myremote:bucket/path"),
+        ("s3:s3.amazonaws.com/bucket", "s3:s3.amazonaws.com/bucket"),
+        ("rclone::s3,access_key_id=A,secret_access_key=S:bucket", "rclone:[REDACTED]"),
+        ("/mnt/odd=path", "[REDACTED]"),
+        ("rest:https://h/repo?token=T", "rest:https://h/repo?[REDACTED]"),
+        ("rest:https://u:p@h/repo#frag", "rest:https://h/repo?[REDACTED]"),
+        ("https://u:p@[::1]:8000/r", "https://[::1]:8000/r"),
         ("", ""),
     ],
 )
