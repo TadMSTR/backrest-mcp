@@ -17,10 +17,21 @@
   any local user. The default is now `~/backrest-restore/`, expanded at load, and
   `ecosystem.config.js` (which set the `/tmp` path explicitly) uses the same directory.
   `restore_snapshot` now refuses, without calling Backrest, a prefix that is missing, a
-  symlink, not a directory, not owned by the server user, or group/world-writable. The
+  symlink, not a directory, not owned by the server user, or not mode 0700. (0700, not
+  just "not writable": restic restores snapshot modes, so under a 0755 prefix a restored
+  tree that was private could be read by other local users.) The
   window between the check and Backrest creating the target is not closed by this; it
   cannot be from this side. `restore_snapshot` remains unregistered in the default
   configuration.
+
+- **Deploy from the lock.** The documented install/update path is now
+  `uv sync --frozen --extra dev` into the venv, not `pip install -e .`, which leaves
+  already-installed dependencies at whatever version they were. The production venv held
+  35 known vulnerabilities in 8 packages (pyjwt, cryptography, starlette, mcp, urllib3,
+  anyio, certifi, pydantic-settings) that CI's lock audit could not see; the locked set
+  has none (audit F-01).
+- **Live leak checks match the JSON-escaped secret** as well as the raw one, so a
+  password with a quote, backslash or non-ASCII character cannot slip past them.
 
 ### Added
 
@@ -35,7 +46,8 @@
 - **`get_backup_freshness(max_age_hours?)`**: per plan, the last backup that ended
   `SUCCESS` or `WARNING`, its age, the latest backup status, and `ok`/`stale`/`unscheduled`.
   The threshold is the argument, else 2× `maxFrequencyHours`, 2× `maxFrequencyDays`, or
-  26 h for a cron schedule. Disabled schedules are never stale.
+  26 h for a cron schedule. Disabled schedules are never stale; `unscheduled_count` is
+  reported beside `stale_count` so a monitor sees them.
 - All three read the config through `redact.py` and are tested against the `LEAKCANARY`
   fixture. The server instructions point coverage questions at them.
 - **`scripts/run_live_conformance.py`**: runs the live tests with `BACKREST_*` read
@@ -56,6 +68,9 @@
   (push, PR, weekly full history), CodeQL, OSSF Scorecard, CODEOWNERS, Dependabot for `uv`
   and `github-actions`, ruff with `E F W I UP B SIM RUF` plus `ruff format`, and a coverage
   floor of 96% (measured 96.27%).
+- CI pins the uv version `setup-uv` installs (`0.13.4`), so the lock check, the audit's
+  export and the wheel build do not drift between runs.
+- Restore tests no longer depend on the session umask (they failed under forge's 0002).
 - `.gitignore`: `*.key`, `*.pem`, `*.p12`, `*.pfx`; the bare `core.*` (which also matched
   `core.py`) is now `/core` and `core.[0-9]*` (vikunja#581).
 

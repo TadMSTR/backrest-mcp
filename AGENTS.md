@@ -150,6 +150,11 @@ Live tests (forge only; credentials are read in-process, never on argv):
 Exit 0 means the live file ran and passed; 3 means everything skipped, which is not a pass.
 `BACKREST_LIVE_ENV_FILE` points it at a different env file.
 
+**Deploy installs from the lock** (`UV_PROJECT_ENVIRONMENT=.venv uv sync --frozen --extra dev`),
+never `pip install -e .`: pip keeps whatever dependency versions the venv already has, so the
+CI lock audit would describe a set that is not running (audit p2 F-01). PM2 restarts are
+sysadmin's; see README "Deployment (PM2)".
+
 ## Git workflow
 
 Branch before editing — do not commit directly to `main`.

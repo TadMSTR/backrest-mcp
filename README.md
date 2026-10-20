@@ -118,6 +118,18 @@ cd /path/to/backrest-mcp
 pm2 start ecosystem.config.js
 ```
 
+**Install and update from the lock**, so production runs the dependency set CI audits.
+`pip install -e .` leaves already-installed dependencies where they are, however old:
+
+```bash
+cd /path/to/backrest-mcp
+git pull
+UV_PROJECT_ENVIRONMENT=.venv uv sync --frozen --extra dev   # dev: the live runner uses pytest
+.venv/bin/python -c "import backrest_mcp.server"
+uv tool run --from "pip-audit==2.10.1" pip-audit -l -P .venv/bin/python   # expect: no known vulnerabilities
+pm2 restart backrest-mcp
+```
+
 The env file must contain `BACKREST_USERNAME`, `BACKREST_PASSWORD`, and (for http mode)
 `BACKREST_MCP_AUTH_TOKEN`. All other settings default safely in `ecosystem.config.js`
 (`BACKREST_READONLY=true`, `BACKREST_ALLOW_DESTRUCTIVE=false`).
