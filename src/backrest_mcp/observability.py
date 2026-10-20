@@ -215,7 +215,8 @@ async def _get_nats():
         # SECURITY[deferred]: no credential support — forge NATS requires per-agent auth.
         # A NATS_URL set without creds now fails *loudly and once* (below) rather than
         # silently. NATS telemetry is not currently enabled for this server.
-        # Target: when NATS telemetry is enabled for this server. Audit: 2026-06-04/backrest-mcp-2026-06. Ticket: BKRST-1.
+        # Target: when NATS telemetry is enabled for this server.
+        # Audit: 2026-06-04/backrest-mcp-2026-06. Ticket: BKRST-1.
         _nats_client = await asyncio.wait_for(
             nats.connect(url, error_cb=_nats_error_cb, **_NATS_CONNECT_OPTS),
             timeout=_NATS_CONNECT_DEADLINE,

@@ -304,7 +304,8 @@ async def list_snapshot_files(
     t0 = time.perf_counter()
     try:
         repo_guid = await _resolve_repo_guid(client, repo_id)
-        # SECURITY[deferred]: path not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
+        # SECURITY[deferred]: path not validated — goes in JSON body to local HTTP API;
+        # Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         body = {"repoGuid": repo_guid, "snapshotId": snapshot_id, "path": path}
         raw = await client.post("ListSnapshotFiles", body)
@@ -478,7 +479,8 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
     t0 = time.perf_counter()
     try:
         # op_id is an int64 proto field; connect JSON accepts a string-encoded int.
-        # SECURITY[deferred]: file_path not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
+        # SECURITY[deferred]: file_path not validated — goes in JSON body to local HTTP API;
+        # Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         raw = await client.post("GetDownloadURL", {"opId": operation_id, "filePath": file_path})
         await emit_metric(
@@ -718,7 +720,8 @@ if ALLOW_DESTRUCTIVE:
             },
         )
         client = get_client()
-        # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
+        # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body
+        # to local HTTP API; Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         body: dict = {
             "snapshotId": snapshot_id,
