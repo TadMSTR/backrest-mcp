@@ -122,17 +122,34 @@ async def test_live_get_config_omits_repo_password(mcp_server):
         pytest.skip("BACKREST_REPO_PASSWORD not set")
     raw = (await mcp_server.call_tool("get_config", {})).content[0].text
     errored = "error" in json.loads(raw)
-    leaked = secret in raw
+    leaked = _contains_secret(raw, secret)
     del raw, secret
     assert not errored, "get_config returned an error"
     assert not leaked, "repo password present in get_config output"
+
+
+def _secret_forms(secret: str) -> set[str]:
+    """The secret as it could appear inside JSON text: raw, ASCII-escaped, UTF-8 escaped.
+
+    A password with a quote, backslash, control or non-ASCII character is escaped in the
+    tool's JSON output, so a plain substring check would miss it (audit p2 F-04).
+    """
+    return {
+        secret,
+        json.dumps(secret)[1:-1],
+        json.dumps(secret, ensure_ascii=False)[1:-1],
+    }
+
+
+def _contains_secret(raw: str, secret: str) -> bool:
+    return bool(secret) and any(form in raw for form in _secret_forms(secret))
 
 
 def _secret_free(raw: str) -> tuple[bool, bool]:
     """(errored, leaked) for a tool's raw JSON text. Quoted-key matches, never bare `env`."""
     secret = os.environ.get("BACKREST_REPO_PASSWORD", "")
     errored = "error" in json.loads(raw)
-    leaked = (bool(secret) and secret in raw) or '"password"' in raw or '"env"' in raw
+    leaked = _contains_secret(raw, secret) or '"password"' in raw or '"env"' in raw
     return errored, leaked
 
 
