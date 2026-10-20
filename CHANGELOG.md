@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- README deploy steps: the `pip-audit` line used `-l -P`, which pip-audit 2.10.1 does not
+  accept. It now audits the venv's site-packages with `--path … --skip-editable`.
+
 ## [0.5.0] — 2026-10-20
 
 ### Security
