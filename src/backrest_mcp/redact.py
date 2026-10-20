@@ -22,8 +22,6 @@ from typing import Any
 
 _TOP_LEVEL_KEYS = ("modno", "version", "instance")
 
-# Policy/schedule messages hold only scalars and enums in v1.13.0 (PrunePolicy, CheckPolicy,
-# ForgetPolicy, CommandPrefix, Schedule, RetentionPolicy), so they are copied whole.
 _REPO_KEYS = (
     "id",
     "guid",
@@ -31,10 +29,6 @@ _REPO_KEYS = (
     "autoInitialize",
     "shared",
     "originInstanceId",
-    "prunePolicy",
-    "checkPolicy",
-    "forgetPolicy",
-    "commandPrefix",
 )
 
 _PLAN_KEYS = (
@@ -43,10 +37,44 @@ _PLAN_KEYS = (
     "paths",
     "excludes",
     "iexcludes",
-    "schedule",
-    "retention",
     "skipIfUnchanged",
 )
+
+# Nested policy messages, projected through their own key allowlists (audit F-04). A field
+# Backrest adds to one of them is dropped until it is named here, the same rule as the top
+# level. ``None`` marks a scalar or enum (only str/int/float/bool pass); a dict marks a
+# nested message. Names are the JSON names in v1.13.0 config.proto.
+_SCHEDULE: dict = {
+    "disabled": None,
+    "cron": None,
+    "maxFrequencyDays": None,
+    "maxFrequencyHours": None,
+    "clock": None,
+}
+_RETENTION: dict = {
+    "policyKeepLastN": None,
+    "policyTimeBucketed": {
+        "hourly": None,
+        "daily": None,
+        "weekly": None,
+        "monthly": None,
+        "yearly": None,
+        "keepLastN": None,
+    },
+    "policyKeepAll": None,
+}
+REPO_MESSAGES: dict[str, dict] = {
+    "prunePolicy": {"schedule": _SCHEDULE, "maxUnusedBytes": None, "maxUnusedPercent": None},
+    "checkPolicy": {"schedule": _SCHEDULE, "structureOnly": None, "readDataSubsetPercent": None},
+    "forgetPolicy": {"schedule": _SCHEDULE, "retention": _RETENTION},
+    "commandPrefix": {"ioNice": None, "cpuNice": None},
+}
+PLAN_MESSAGES: dict[str, dict] = {
+    "schedule": _SCHEDULE,
+    "retention": _RETENTION,
+}
+
+_SCALARS = (str, int, float, bool)
 
 _HOOK_KEYS = ("conditions", "onError")
 
@@ -55,6 +83,55 @@ REDACTED = "[REDACTED]"
 
 def _pick(src: dict, keys: tuple[str, ...]) -> dict:
     return {k: copy.deepcopy(src[k]) for k in keys if k in src}
+
+
+def _project_message(value: Any, spec: dict) -> dict:
+    """Copy only the keys ``spec`` names, recursing into nested messages."""
+    if not isinstance(value, dict):
+        return {}
+    out: dict = {}
+    for key, sub in spec.items():
+        if key not in value:
+            continue
+        v = value[key]
+        if sub is None:
+            if isinstance(v, _SCALARS):
+                out[key] = v
+        elif isinstance(v, dict):
+            out[key] = _project_message(v, sub)
+    return out
+
+
+def _pick_messages(src: dict, messages: dict[str, dict]) -> dict:
+    return {k: _project_message(src[k], spec) for k, spec in messages.items() if k in src}
+
+
+def _unknown(value: Any, spec: dict, where: str) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    found = []
+    for key, v in value.items():
+        if key not in spec:
+            found.append(f"{where}.{key}")
+        elif isinstance(spec[key], dict):
+            found.extend(_unknown(v, spec[key], f"{where}.{key}"))
+    return found
+
+
+def unknown_policy_keys(cfg: Any) -> list[str]:
+    """Key paths inside the nested policy messages that the allowlists do not name.
+
+    Returns names only, for example ``repos[0].prunePolicy.newField``, never values. The
+    live conformance check uses it to report a new Backrest field before anyone needs it.
+    """
+    if not isinstance(cfg, dict):
+        return []
+    found: list[str] = []
+    for kind, messages in (("repos", REPO_MESSAGES), ("plans", PLAN_MESSAGES)):
+        for i, item in enumerate(_dicts(cfg.get(kind))):
+            for name, spec in messages.items():
+                found.extend(_unknown(item.get(name), spec, f"{kind}[{i}].{name}"))
+    return found
 
 
 def _dicts(value: Any) -> list[dict]:
@@ -134,6 +211,7 @@ def project_hook(hook: dict) -> dict:
 def project_repo(repo: dict) -> dict:
     """Project one repo. Never returns ``password``, ``env`` values or ``flags``."""
     out = _pick(repo, _REPO_KEYS)
+    out.update(_pick_messages(repo, REPO_MESSAGES))
     uri = repo.get("uri")
     if isinstance(uri, str):
         out["uri"] = strip_userinfo(uri)
@@ -148,6 +226,7 @@ def project_repo(repo: dict) -> dict:
 def project_plan(plan: dict) -> dict:
     """Project one plan. ``backup_flags`` is reduced to a count."""
     out = _pick(plan, _PLAN_KEYS)
+    out.update(_pick_messages(plan, PLAN_MESSAGES))
     out["backupFlagCount"] = len(_strings(plan.get("backup_flags")))
     out["hooks"] = [project_hook(h) for h in _dicts(plan.get("hooks"))]
     return out
