@@ -5,8 +5,9 @@ Reconciled against the deployed Backrest v1.13.0 connect-rpc API.
 
 Tool registration is gated by safety flags from backrest_mcp.safety:
   Always registered (read-only):
-    get_health, get_config, list_snapshots, list_snapshot_files, get_summary,
-    get_operations, get_logs, get_download_url
+    get_health, get_config, list_plans, find_plan_for_path, get_backup_freshness,
+    list_snapshots, list_snapshot_files, get_summary, get_operations, get_logs,
+    get_download_url
 
   Registered when BACKREST_READONLY=false:
     trigger_backup, do_repo_task, cancel_operation
@@ -36,6 +37,7 @@ from .models import (
     SummaryDashboard,
 )
 from .observability import emit_metric
+from .plans import covering_root, excluded_by, normalise_path, stale_threshold
 from .redact import project_config
 from .safety import (
     ALLOW_DESTRUCTIVE,
@@ -76,6 +78,9 @@ mcp = FastMCP(
         "(http://localhost:9898). Provides read access to backup operations, snapshots, "
         "configuration, dashboard stats, and operation logs. Start with get_health to "
         "confirm the instance is reachable and credentials are valid. "
+        "To answer 'is this path backed up?' call find_plan_for_path; to see what each plan "
+        "covers call list_plans; to check for missed or failing backups call "
+        "get_backup_freshness. Use get_config only when you need repo settings too. "
         "Write tools (trigger_backup, do_repo_task, cancel_operation) are only registered "
         "when BACKREST_READONLY=false. Destructive tools (forget_snapshot, restore_snapshot) "
         "additionally require BACKREST_ALLOW_DESTRUCTIVE=true. RunCommand/SetConfig/AddRepo/"
@@ -134,6 +139,20 @@ async def _list_repos(client: BackrestClient) -> list[dict]:
     """
     cfg = await client.post("GetConfig", {})
     return cfg.get("repos", []) or []
+
+
+async def _get_operations_raw(client: BackrestClient, selector: dict, last_n: int) -> list:
+    """Call GetOperations and return the raw operation dicts.
+
+    GetOperations returns nothing without a selector, so callers pass one (OpSelector
+    matches repos on repoGuid, not the human ID).
+    """
+    body: dict = {"lastN": last_n}
+    if selector:
+        body["selector"] = selector
+    raw = await client.post("GetOperations", body)
+    ops = raw.get("operations") if isinstance(raw, dict) else None
+    return [o for o in ops if isinstance(o, dict)] if isinstance(ops, list) else []
 
 
 async def _resolve_repo_guid(client: BackrestClient, repo_id: str) -> str:
@@ -224,6 +243,178 @@ async def get_config() -> dict:
         return result
     except Exception as e:
         return _tool_error("get_config", e)
+
+
+@mcp.tool()
+async def list_plans() -> dict:
+    """List the backup plans: which paths each backs up, to which repo, and when.
+
+    Returns the same secret-free projection of each plan as get_config: id, repo, paths,
+    excludes, iexcludes, schedule, retention, skipIfUnchanged, backupFlagCount and hooks
+    (action type names only). Prefer this to get_config when you only need plans.
+    """
+    client = get_client()
+    t0 = time.perf_counter()
+    try:
+        plans = project_config(await client.post("GetConfig", {})).get("plans", [])
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "list_plans"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(plans)},
+        )
+        return {"plans": plans, "count": len(plans)}
+    except Exception as e:
+        return _tool_error("list_plans", e)
+
+
+@mcp.tool()
+async def find_plan_for_path(path: str) -> dict:
+    """Find which backup plans cover an absolute path, and whether an exclude drops it.
+
+    Args:
+        path: An absolute path on the backed-up host, e.g. "/home/ted/Documents/x.txt".
+              Pure string matching: the path does not have to exist and the filesystem
+              is never read.
+
+    Returns every plan with a `paths` entry equal to the path or one of its ancestors.
+    Each carries `covered_by` (that entry), `excluded_by` (the first `excludes` or
+    `iexcludes` pattern that matches, or null), `repo` and `schedule`. `backed_up` is true
+    when at least one plan covers the path without excluding it.
+
+    Exclude matching approximates restic's (no `!` negation, exclude files, size or
+    marker-file excludes, or excludes passed in backup flags), so the response says
+    "match": "approximate". Check list_snapshot_files to confirm.
+    """
+    try:
+        norm = normalise_path(path)
+    except ValueError as e:
+        return _tool_error("find_plan_for_path", e)
+    client = get_client()
+    t0 = time.perf_counter()
+    try:
+        plans = project_config(await client.post("GetConfig", {})).get("plans", [])
+        matches = []
+        for plan in plans:
+            root = covering_root(plan, norm)
+            if root is None:
+                continue
+            matches.append(
+                {
+                    "plan_id": plan.get("id"),
+                    "repo": plan.get("repo"),
+                    "covered_by": root,
+                    "excluded_by": excluded_by(plan, norm),
+                    "schedule": plan.get("schedule"),
+                }
+            )
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "find_plan_for_path"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(matches)},
+        )
+        return {
+            "path": norm,
+            "match": "approximate",
+            "backed_up": any(m["excluded_by"] is None for m in matches),
+            "plans": matches,
+        }
+    except Exception as e:
+        return _tool_error("find_plan_for_path", e)
+
+
+# Operations scanned per plan when looking for the last good backup. Hooks, index, forget
+# and prune runs are operations too, so this is several backups' worth, not 200 backups.
+_FRESHNESS_LAST_N = 200
+_GOOD_BACKUP = ("STATUS_SUCCESS", "STATUS_WARNING")
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _as_int(value: object) -> int | None:
+    # int64 fields arrive as JSON strings in the connect encoding.
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return None
+
+
+@mcp.tool()
+async def get_backup_freshness(max_age_hours: float | None = None) -> dict:
+    """Report, per plan, when it last backed up successfully and whether that is stale.
+
+    Args:
+        max_age_hours: Mark a plan stale when its last good backup is older than this.
+            When omitted, each plan's own schedule decides: 2x maxFrequencyHours,
+            2x maxFrequencyDays, or 26 hours for a cron schedule.
+
+    A good backup is a backup operation that ended in STATUS_SUCCESS or STATUS_WARNING.
+    For each plan: `last_success` (UTC), `age_hours`, `last_status` (of the most recent
+    backup operation, good or not), `threshold_hours`, `threshold_source` and `state`:
+      - "ok": a good backup within the threshold
+      - "stale": none within the threshold, or none among the plan's last 200 operations
+      - "unscheduled": the schedule is disabled or missing; never stale
+    `stale` is true only for "stale". Read-only.
+    """
+    if max_age_hours is not None and not (0 < max_age_hours <= 24 * 366):
+        return _tool_error(
+            "get_backup_freshness", ValueError("max_age_hours must be > 0 and <= 8784")
+        )
+    client = get_client()
+    t0 = time.perf_counter()
+    try:
+        cfg = project_config(await client.post("GetConfig", {}))
+        guids = {r.get("id"): r.get("guid") for r in cfg.get("repos", [])}
+        now_ms = _now() * 1000
+        out = []
+        for plan in cfg.get("plans", []):
+            threshold, source = stale_threshold(plan.get("schedule"), max_age_hours)
+            selector: dict = {"planId": plan.get("id")}
+            if guids.get(plan.get("repo")):
+                selector["repoGuid"] = guids[plan.get("repo")]
+            ops = await _get_operations_raw(client, selector, _FRESHNESS_LAST_N)
+            backups = [o for o in ops if "operationBackup" in o]
+            backups.sort(key=lambda o: _as_int(o.get("unixTimeStartMs")) or 0, reverse=True)
+            good_ends = []
+            for o in backups:
+                if o.get("status") in _GOOD_BACKUP:
+                    end = _as_int(o.get("unixTimeEndMs")) or _as_int(o.get("unixTimeStartMs"))
+                    if end:
+                        good_ends.append(end)
+            last_ms = max(good_ends) if good_ends else None
+            age = round((now_ms - last_ms) / 3_600_000, 2) if last_ms is not None else None
+            if threshold is None:
+                state = "unscheduled"
+            elif age is None or age > threshold:
+                state = "stale"
+            else:
+                state = "ok"
+            out.append(
+                {
+                    "plan_id": plan.get("id"),
+                    "repo": plan.get("repo"),
+                    "last_success": _fmt_ms(last_ms) if last_ms is not None else None,
+                    "age_hours": age,
+                    "last_status": backups[0].get("status") if backups else None,
+                    "threshold_hours": threshold,
+                    "threshold_source": source,
+                    "state": state,
+                    "stale": state == "stale",
+                }
+            )
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_backup_freshness"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(out)},
+        )
+        return {
+            "plans": out,
+            "stale_count": sum(1 for p in out if p["stale"]),
+            "checked_at": _fmt_ms(int(now_ms)),
+        }
+    except Exception as e:
+        return _tool_error("get_backup_freshness", e)
 
 
 @mcp.tool()
@@ -390,11 +581,8 @@ async def get_operations(
 
         ops: list = []
         for sel in selectors:
-            body: dict = {"lastN": limit}
-            if sel:
-                body["selector"] = sel
-            raw = await client.post("GetOperations", body)
-            ops.extend(OperationList.model_validate(raw).operations)
+            raw_ops = await _get_operations_raw(client, sel, limit)
+            ops.extend(OperationList.model_validate({"operations": raw_ops}).operations)
 
         ops.sort(key=lambda o: o.unixTimeStartMs or 0, reverse=True)
         ops = ops[:limit]

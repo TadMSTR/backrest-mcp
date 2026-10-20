@@ -86,6 +86,7 @@ def check_restore_prefix(prefix: str) -> str | None:
         return "Restore prefix is group- or world-writable."
     return None
 
+
 # Audit log path. Every non-read tool call is appended here as a JSON line.
 AUDIT_LOG = os.getenv("BACKREST_AUDIT_LOG", "")
 
