@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.4.1] — 2026-10-20
+
+### Security
+
+- **`get_config` returned the restic repository password in cleartext** (vikunja#1176).
+  It passed Backrest's `GetConfig` response through unchanged, and Backrest v1.13.0 masks
+  only `auth.users[].passwordBcrypt`. `repos[].password`, `repos[].env` values,
+  credential-bearing `uri` userinfo, restic `flags`, hook targets (webhook URLs, Gotify and
+  Telegram tokens, commands) and the multihost `sync` block (private identity, pairing
+  secrets) all reached the caller. Its docstring said "Does not expose credentials".
+  `get_config` now returns an **allowlist projection** built by the new pure module
+  `backrest_mcp/redact.py`. Unknown keys are dropped by construction, so a secret field a
+  future Backrest adds is never returned. Secret-bearing fields are replaced by safe
+  summaries: `envKeys` (names only), `hasPassword`, `flagCount`, `backupFlagCount`, and
+  each hook's action *type*. Repo URIs lose `user:password@` userinfo and any query
+  string or fragment. Where the userinfo boundary is ambiguous (an unencoded `/`, `?` or
+  `#` before the last `@`, or an `@` in the path), everything after `://` is redacted
+  instead. A non-URL URI containing `=`, such as restic's `rclone:` backend with an inline
+  rclone connection string (`access_key_id=…,secret_access_key=…`), is redacted after its
+  backend prefix.
+  Operators who called `get_config` on an earlier version should treat the repo password
+  as disclosed to that session's transcript and any LLM tracing.
+- **`restore_snapshot` checked `realpath(target)` but sent the raw `target`.** The
+  resolved path is now sent to Backrest and recorded in the audit log. This defeats a
+  symlink that already exists at the target path when the check runs. It **narrows** the
+  check-to-restore race; it does not close it. Backrest creates the target afterwards, so
+  a directory component under the prefix can still be swapped in between. The prefix
+  itself, by default in world-writable `/tmp`, is resolved without an ownership check.
+  Both remain open (tracked separately). `restore_snapshot` is registered only when
+  `BACKREST_ALLOW_DESTRUCTIVE=true`.
+
+### Tests
+
+- Canary fixture with `LEAKCANARY` in every secret-bearing v1.13.0 field, plus
+  field-presence and unknown-key tests. The tests fail against v0.4.0.
+- Live test `test_live_get_config_omits_repo_password` (needs `BACKREST_REPO_PASSWORD`). It
+  was run against v0.4.0 and failed as expected, then passed on the fix. Its assertion is
+  written so that a failure never prints the secret.
+
 ## [0.4.0] — 2026-08-30
 
 Telemetry that fails is now visible. Ports the fixes proven in dockhand-mcp v0.4.0

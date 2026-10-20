@@ -36,6 +36,7 @@ from .models import (
     SummaryDashboard,
 )
 from .observability import emit_metric
+from .redact import project_config
 from .safety import (
     ALLOW_DESTRUCTIVE,
     READONLY,
@@ -122,7 +123,12 @@ def _fmt_duration(start_ms: Optional[int], end_ms: Optional[int]) -> str:
 
 
 async def _list_repos(client: BackrestClient) -> list[dict]:
-    """Return the list of configured repos ({id, guid, ...}) from GetConfig."""
+    """Return the list of configured repos ({id, guid, ...}) from GetConfig.
+
+    INTERNAL ONLY: this is the raw config, including repos[].password and env values.
+    Callers may read id/guid from it; never return it, or anything derived from it
+    wholesale, to a tool caller. Use redact.project_config for that (#1176).
+    """
     cfg = await client.post("GetConfig", {})
     return cfg.get("repos", []) or []
 
@@ -177,14 +183,27 @@ async def get_health() -> dict:
 
 @mcp.tool()
 async def get_config() -> dict:
-    """Read the Backrest configuration (repos, plans, global settings).
+    """Read a secret-free view of the Backrest configuration (repos, plans, auth).
 
-    Returns the full Backrest config as a dict. Does not expose credentials.
+    Returns an allowlist projection, not the raw config:
+      - top level: modno, version, instance
+      - repos: id, guid, uri (user:password@ and query removed; fully redacted if
+        ambiguous), autoUnlock, autoInitialize, shared, originInstanceId,
+        prune/check/forget policies, commandPrefix, envKeys (variable names only),
+        hasPassword (bool), flagCount (int), hooks
+      - plans: id, repo, paths, excludes, iexcludes, schedule, retention,
+        skipIfUnchanged, backupFlagCount (int), hooks
+      - hooks: conditions, onError, and action (the action type name only)
+      - auth: disabled, and user names
+
+    Never included: repo passwords, env values, restic flags, hook commands and
+    targets (webhook URLs, tokens), user password hashes, the multihost sync block
+    (identity, pairing secrets), or any field not listed above.
     """
     client = get_client()
     t0 = time.perf_counter()
     try:
-        result = await client.post("GetConfig", {})
+        result = project_config(await client.post("GetConfig", {}))
         await emit_metric("backrest_tool", {"tool": "get_config"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
         return result
     except Exception as e:
@@ -613,7 +632,10 @@ if ALLOW_DESTRUCTIVE:
                 "isError": True,
             }
 
-        audit_log("restore_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "path": path, "target": target, "plan_id": plan_id})
+        # Send and record the resolved path, not the raw one: a symlink swapped in after
+        # the prefix check above could otherwise redirect the restore (TOCTOU).
+        resolved_target = str(resolved)
+        audit_log("restore_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "path": path, "target": resolved_target, "plan_id": plan_id})
         client = get_client()
         # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
@@ -621,7 +643,7 @@ if ALLOW_DESTRUCTIVE:
             "snapshotId": snapshot_id,
             "repoId": repo_id,
             "path": path,
-            "target": target,
+            "target": resolved_target,
         }
         if plan_id:
             body["planId"] = plan_id

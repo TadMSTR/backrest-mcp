@@ -188,6 +188,37 @@ async def test_restore_valid_target_calls_api(monkeypatch, tmp_path):
         assert restore_route.call_count == 1
 
 
+async def test_restore_sends_resolved_target(monkeypatch, tmp_path):
+    """The body and audit log carry realpath(target), not the raw path (TOCTOU).
+
+    The target is a symlink inside the prefix pointing at another in-prefix directory.
+    Sending the raw path would let the link be re-pointed after the check.
+    """
+    restore_prefix = tmp_path / "restore"
+    real_dir = restore_prefix / "real"
+    real_dir.mkdir(parents=True)
+    link = restore_prefix / "link"
+    link.symlink_to(real_dir)
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("BACKREST_AUDIT_LOG", str(audit))
+    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix))
+    with respx.mock() as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/Restore").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        await mcp.call_tool("restore_snapshot", {
+            "snapshot_id": "abc123",
+            "repo_id": "local",
+            "path": "/home/ted/docs",
+            "target": str(link),
+        })
+    expected = str(real_dir.resolve())
+    assert _body(route)["target"] == expected
+    entry = json.loads(audit.read_text().splitlines()[-1])
+    assert expected in json.dumps(entry)
+    assert str(link) not in json.dumps(entry)
+
+
 # ---------------------------------------------------------------------------
 # Write tool happy paths (BACKREST_READONLY=false)
 # ---------------------------------------------------------------------------

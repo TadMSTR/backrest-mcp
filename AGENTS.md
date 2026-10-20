@@ -14,7 +14,7 @@ browsing snapshot contents, triggering backups, running repo maintenance tasks, 
 
 **Always registered (read-only):**
 - `get_health()` — Reachability + credential health (`ok`/`auth_failed`/`unreachable`); poll-safe
-- `get_config()` — Read Backrest configuration (repos, plans, global settings)
+- `get_config()` — Secret-free allowlist projection of the Backrest config (`redact.py`); never returns repo passwords, env values, flags, hook targets or the multihost block
 - `list_snapshots(repo_id?, plan_id?)` — List snapshots; no args → enumerate all repos, tag each
 - `list_snapshot_files(repo_id, snapshot_id, path?)` — Browse files (repo_id resolved to GUID internally)
 - `get_summary()` — 30-day dashboard stats per repo and plan
@@ -106,6 +106,10 @@ Four layered controls gate write and destructive operations:
   bearer token; `StaticTokenVerifier` gates the endpoint.
 - **No credentials in logs** — `BACKREST_USERNAME`/`BACKREST_PASSWORD` are used only in the
   httpx Basic Auth tuple and never written to any log or audit entry.
+- **Config is projected, never passed through** — Backrest's `GetConfig` returns
+  `repos[].password` in cleartext. Any tool that returns config data to a caller must go
+  through `redact.project_config` (or its `project_*` helpers), which builds a new dict from
+  allowlisted keys. `_list_repos` reads the raw config for `guid` resolution only (#1176).
 - **lru_cache on get_client()** — single BackrestClient instance reused for the server lifetime.
 - **Opt-in write access** — safe default requires no configuration. Set env vars explicitly to unlock.
 
