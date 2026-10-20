@@ -126,9 +126,13 @@ cd /path/to/backrest-mcp
 git pull
 UV_PROJECT_ENVIRONMENT=.venv uv sync --frozen --extra dev   # dev: the live runner uses pytest
 .venv/bin/python -c "import backrest_mcp.server"
-uv tool run --from "pip-audit==2.10.1" pip-audit -l -P .venv/bin/python   # expect: no known vulnerabilities
+uv tool run --from "pip-audit==2.10.1" pip-audit --skip-editable \
+  --path "$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 pm2 restart backrest-mcp
 ```
+
+The audit should report nothing except, possibly, `pip` itself: pip is venv tooling outside
+`uv.lock`, not a dependency of the server.
 
 The env file must contain `BACKREST_USERNAME`, `BACKREST_PASSWORD`, and (for http mode)
 `BACKREST_MCP_AUTH_TOKEN`. All other settings default safely in `ecosystem.config.js`
