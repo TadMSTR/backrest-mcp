@@ -72,3 +72,17 @@ def test_pin_check_fires_on_planted_violations():
 
 def test_permissions_check_fires_on_planted_violation():
     assert not _TOP_PERMISSIONS.search("jobs:\n  x:\n    permissions:\n      contents: read\n")
+
+
+def test_setup_uv_pins_the_uv_version():
+    """A SHA-pinned setup-uv still installs the latest uv unless `version:` is set (F-06)."""
+    text = (WORKFLOWS / "ci.yml").read_text()
+    uses = text.count("uses: astral-sh/setup-uv@")
+    pinned = len(
+        re.findall(
+            r'uses: astral-sh/setup-uv@\S+.*\n\s+with:\n(?:\s+#.*\n)*\s+version: "\d+\.\d+\.\d+"',
+            text,
+        )
+    )
+    assert uses >= 1
+    assert pinned == uses

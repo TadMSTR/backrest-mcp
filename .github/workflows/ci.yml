@@ -31,6 +31,12 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # The action is SHA-pinned, but without this it fetches the latest uv, so
+          # `uv lock --check`, the pylock export the audit reads, and `uv build` could change
+          # between runs (audit p2 F-06). Dependabot does not bump this input: move it by
+          # hand, in all three jobs, alongside a `uv lock` refresh.
+          version: "0.13.4"
 
       # FROM THE LOCK. `--frozen` installs exactly uv.lock and fails rather than re-resolve,
       # so a green run is evidence about the set this project pins. The ranges in
@@ -69,6 +75,12 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # The action is SHA-pinned, but without this it fetches the latest uv, so
+          # `uv lock --check`, the pylock export the audit reads, and `uv build` could change
+          # between runs (audit p2 F-06). Dependabot does not bump this input: move it by
+          # hand, in all three jobs, alongside a `uv lock` refresh.
+          version: "0.13.4"
 
       # A committed lock nobody checks is a stale file that looks like a pin. This fails
       # when pyproject.toml changed and uv.lock did not.
@@ -121,6 +133,12 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # The action is SHA-pinned, but without this it fetches the latest uv, so
+          # `uv lock --check`, the pylock export the audit reads, and `uv build` could change
+          # between runs (audit p2 F-06). Dependabot does not bump this input: move it by
+          # hand, in all three jobs, alongside a `uv lock` refresh.
+          version: "0.13.4"
 
       - name: Build and import from outside the tree
         run: |
