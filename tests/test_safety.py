@@ -133,6 +133,7 @@ async def test_forget_correct_confirm_calls_api(monkeypatch):
 
 async def test_restore_outside_prefix_rejected(monkeypatch, tmp_path):
     """restore_snapshot with target outside allowed prefix → isError."""
+    (tmp_path / "restore").mkdir()
     restore_prefix = str(tmp_path / "restore")
     mcp = _reload_server(
         monkeypatch, readonly="false", destructive="true", restore_prefix=restore_prefix
@@ -253,6 +254,113 @@ async def test_restore_sends_resolved_target(monkeypatch, tmp_path):
     entry = json.loads(audit.read_text().splitlines()[-1])
     assert expected in json.dumps(entry)
     assert str(link) not in json.dumps(entry)
+
+
+# ---------------------------------------------------------------------------
+# restore prefix must be a safe boundary (#1182)
+# ---------------------------------------------------------------------------
+
+
+async def _restore_into(monkeypatch, prefix, target):
+    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=prefix)
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/Restore").mock(
+            return_value=httpx.Response(200, json={})
+        )
+        result = await mcp.call_tool(
+            "restore_snapshot",
+            {"snapshot_id": "abc123", "repo_id": "local", "path": "/", "target": target},
+        )
+    return json.loads(result.content[0].text), route.call_count
+
+
+async def test_restore_prefix_missing_refused(monkeypatch, tmp_path):
+    prefix = tmp_path / "restore"
+    data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    assert data["isError"] is True
+    assert "does not exist" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_prefix_symlink_refused(monkeypatch, tmp_path):
+    """A planted symlink at the prefix name would move the boundary to its target."""
+    home = tmp_path / "home"
+    home.mkdir()
+    prefix = tmp_path / "restore"
+    prefix.symlink_to(home)
+    # Trailing slash on purpose: lstat("link/") follows the link.
+    data, calls = await _restore_into(monkeypatch, f"{prefix}/", str(home / "x"))
+    assert data["isError"] is True
+    assert "symlink" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_prefix_not_a_directory_refused(monkeypatch, tmp_path):
+    prefix = tmp_path / "restore"
+    prefix.write_text("")
+    data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    assert "not a directory" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_prefix_world_writable_refused(monkeypatch, tmp_path):
+    prefix = tmp_path / "restore"
+    prefix.mkdir()
+    prefix.chmod(0o777)
+    data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    assert "group- or world-writable" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_prefix_group_writable_refused(monkeypatch, tmp_path):
+    prefix = tmp_path / "restore"
+    prefix.mkdir()
+    prefix.chmod(0o770)
+    data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    assert "group- or world-writable" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_prefix_foreign_owner_refused(monkeypatch, tmp_path):
+    prefix = tmp_path / "restore"
+    prefix.mkdir(mode=0o700)
+    import os
+
+    monkeypatch.setattr(os, "geteuid", lambda: os.stat(prefix).st_uid + 1)
+    data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    assert "not owned by the server user" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_prefix_owned_0700_allowed(monkeypatch, tmp_path):
+    prefix = tmp_path / "restore"
+    prefix.mkdir(mode=0o700)
+    data, calls = await _restore_into(monkeypatch, f"{prefix}/", str(prefix / "x"))
+    assert "isError" not in data
+    assert calls == 1
+
+
+def test_restore_prefix_uninspectable_refused(monkeypatch):
+    import os
+
+    from backrest_mcp import safety
+
+    def boom(_):
+        raise PermissionError
+
+    monkeypatch.setattr(os, "lstat", boom)
+    assert safety.check_restore_prefix("/x") == "Restore prefix cannot be inspected."
+
+
+def test_restore_prefix_default_is_under_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("BACKREST_RESTORE_ALLOWED_PREFIX", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sys.modules.pop("backrest_mcp.safety", None)
+    import backrest_mcp.safety as safety
+
+    prefix = safety.RESTORE_ALLOWED_PREFIX
+    assert prefix == f"{tmp_path}/backrest-restore/"
+    sys.modules.pop("backrest_mcp.safety", None)
 
 
 # ---------------------------------------------------------------------------

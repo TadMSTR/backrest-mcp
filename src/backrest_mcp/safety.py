@@ -7,7 +7,8 @@ No env vars needed to stay safe — only set them to unlock writes.
 Controls:
   BACKREST_READONLY (default: true)        — register only read-only tools
   BACKREST_ALLOW_DESTRUCTIVE (default: false) — also register forget/restore
-  BACKREST_RESTORE_ALLOWED_PREFIX          — restore target path prefix
+  BACKREST_RESTORE_ALLOWED_PREFIX          — restore target path prefix (default
+                                             ~/backrest-restore/, expanded at load)
   BACKREST_AUDIT_LOG                       — path for write-op audit log (JSONL)
 """
 
@@ -17,6 +18,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import time
 
 # Pattern for Backrest IDs (plan IDs, repo IDs, snapshot IDs, operation IDs).
@@ -46,7 +48,43 @@ ALLOW_DESTRUCTIVE = not READONLY and os.getenv("BACKREST_ALLOW_DESTRUCTIVE", "fa
 )
 
 # Restore operations must write under this prefix. Prevents restoring over live data.
-RESTORE_ALLOWED_PREFIX = os.getenv("BACKREST_RESTORE_ALLOWED_PREFIX", "/tmp/backrest-restore/")
+# The default sits under the server user's home, not /tmp: in a world-writable directory
+# whoever creates the name first owns the boundary (#1182). check_restore_prefix() refuses
+# a prefix that is not a real directory owned by this user.
+RESTORE_ALLOWED_PREFIX = os.path.expanduser(
+    os.getenv("BACKREST_RESTORE_ALLOWED_PREFIX", "~/backrest-restore/")
+)
+
+
+def check_restore_prefix(prefix: str) -> str | None:
+    """Return a fixed refusal message if ``prefix`` is not a safe restore boundary, else None.
+
+    Refused: missing, a symlink, not a directory, not owned by this process's effective
+    uid, or group/world-writable. Only the last component is checked; its parents are the
+    operator's choice. The trailing slash is stripped first, because ``lstat("link/")``
+    follows the link.
+
+    This does not close the window after the check (#1182 part b): Backrest creates the
+    target's components later, and a writer that shares this uid could swap one in between.
+    The mitigation for that is operational: restore_snapshot is not registered in
+    production (BACKREST_READONLY=true).
+    """
+    path = prefix.rstrip("/") or "/"
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return "Restore prefix does not exist. Create it (mode 0700) before restoring."
+    except OSError:
+        return "Restore prefix cannot be inspected."
+    if stat.S_ISLNK(st.st_mode):
+        return "Restore prefix is a symlink. Point it at a real directory."
+    if not stat.S_ISDIR(st.st_mode):
+        return "Restore prefix is not a directory."
+    if st.st_uid != os.geteuid():
+        return "Restore prefix is not owned by the server user."
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return "Restore prefix is group- or world-writable."
+    return None
 
 # Audit log path. Every non-read tool call is appended here as a JSON line.
 AUDIT_LOG = os.getenv("BACKREST_AUDIT_LOG", "")

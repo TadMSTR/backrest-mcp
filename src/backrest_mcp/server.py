@@ -42,6 +42,7 @@ from .safety import (
     READONLY,
     RESTORE_ALLOWED_PREFIX,
     audit_log,
+    check_restore_prefix,
     validate_backrest_id,
 )
 
@@ -670,7 +671,8 @@ if ALLOW_DESTRUCTIVE:
     ) -> dict:
         """Restore a snapshot (or a path within it) to a target directory.
 
-        The target must be under BACKREST_RESTORE_ALLOWED_PREFIX (default: /tmp/backrest-restore/).
+        The target must be under BACKREST_RESTORE_ALLOWED_PREFIX (default: ~/backrest-restore/),
+        which must be a real directory owned by the server user and not group/world-writable.
         This prevents accidental restores over live data. After verifying the restored files,
         move them to the desired location manually.
 
@@ -690,6 +692,9 @@ if ALLOW_DESTRUCTIVE:
             validate_backrest_id("repo_id", repo_id)
         except ValueError as e:
             return _tool_error("restore_snapshot", e)
+        refusal = check_restore_prefix(RESTORE_ALLOWED_PREFIX)
+        if refusal:
+            return {"content": [{"type": "text", "text": refusal}], "isError": True}
         allowed = pathlib.Path(os.path.realpath(RESTORE_ALLOWED_PREFIX))
         resolved = pathlib.Path(os.path.realpath(target))
         if not resolved.is_relative_to(allowed):

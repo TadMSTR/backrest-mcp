@@ -64,7 +64,7 @@ ecosystem.config.js  PM2 config (HTTP transport, BACKREST_READONLY=true default)
 | `BACKREST_PASSWORD` | — | Basic Auth password (optional) |
 | `BACKREST_READONLY` | `true` | Disable all write tools when true |
 | `BACKREST_ALLOW_DESTRUCTIVE` | `false` | Enable forget_snapshot + restore_snapshot |
-| `BACKREST_RESTORE_ALLOWED_PREFIX` | `/tmp/backrest-restore/` | Restore target path guard |
+| `BACKREST_RESTORE_ALLOWED_PREFIX` | `~/backrest-restore/` | Restore target path guard; must be a real directory owned by the server user, not group/world-writable |
 | `BACKREST_AUDIT_LOG` | — | JSONL audit log path for write ops |
 | `BACKREST_MCP_TRANSPORT` | `stdio` | `stdio` or `http` (loopback PM2 service) |
 | `BACKREST_MCP_HTTP_HOST` | `127.0.0.1` | http bind host (non-loopback refused unless override) |

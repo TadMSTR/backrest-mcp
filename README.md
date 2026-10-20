@@ -56,7 +56,7 @@ BACKREST_ALLOW_DESTRUCTIVE=true   # enables forget_snapshot, restore_snapshot
 
 **4. Restore path guard**
 
-`restore_snapshot` validates the `target` path against `BACKREST_RESTORE_ALLOWED_PREFIX` (default: `/tmp/backrest-restore/`) using `os.path.realpath()`. Path traversal attempts are blocked. After verifying restored files, move them manually.
+`restore_snapshot` validates the `target` path against `BACKREST_RESTORE_ALLOWED_PREFIX` (default: `~/backrest-restore/`) using `os.path.realpath()`. Path traversal attempts are blocked. The prefix itself must be a real directory (not a symlink) owned by the server user and not group- or world-writable; otherwise the restore is refused. Create it with `mkdir -m 0700 ~/backrest-restore`. After verifying restored files, move them manually.
 
 **5. Audit log**
 
@@ -71,7 +71,7 @@ Set `BACKREST_AUDIT_LOG=/path/to/audit.jsonl` to log all write operations. Crede
 | `BACKREST_PASSWORD` | — | Basic Auth password |
 | `BACKREST_READONLY` | `true` | Disable all write tools |
 | `BACKREST_ALLOW_DESTRUCTIVE` | `false` | Enable forget/restore (requires READONLY=false) |
-| `BACKREST_RESTORE_ALLOWED_PREFIX` | `/tmp/backrest-restore/` | Restore target path guard |
+| `BACKREST_RESTORE_ALLOWED_PREFIX` | `~/backrest-restore/` | Restore target path guard (see above) |
 | `BACKREST_AUDIT_LOG` | — | JSONL audit log for write ops |
 | `BACKREST_MCP_TRANSPORT` | `stdio` | `stdio` or `http` (long-lived PM2 service) |
 | `BACKREST_MCP_HTTP_HOST` | `127.0.0.1` | Bind host for http mode (non-loopback refused) |
