@@ -63,7 +63,7 @@ BACKREST_ALLOW_DESTRUCTIVE=true   # enables forget_snapshot, restore_snapshot
 
 **4. Restore path guard**
 
-`restore_snapshot` validates the `target` path against `BACKREST_RESTORE_ALLOWED_PREFIX` (default: `~/backrest-restore/`) using `os.path.realpath()`. Path traversal attempts are blocked. The prefix itself must be a real directory (not a symlink) owned by the server user and not group- or world-writable; otherwise the restore is refused. Create it with `mkdir -m 0700 ~/backrest-restore`. After verifying restored files, move them manually.
+`restore_snapshot` validates the `target` path against `BACKREST_RESTORE_ALLOWED_PREFIX` (default: `~/backrest-restore/`) using `os.path.realpath()`. Path traversal attempts are blocked. The prefix itself must be a real directory (not a symlink) owned by the server user, with mode 0700; otherwise the restore is refused. Create it with `mkdir -m 0700 ~/backrest-restore`. After verifying restored files, move them manually.
 
 **5. Audit log**
 

@@ -21,6 +21,17 @@ def _body(route):
     return json.loads(route.calls[0].request.content)
 
 
+def _private_dir(path):
+    """Create a restore prefix that passes check_restore_prefix whatever the umask.
+
+    mkdir(mode=) is masked by the umask, and forge's session umask is 0002, so the mode is
+    set explicitly (audit p2 F-02).
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+    return path
+
+
 def _reload_server(monkeypatch, readonly="true", destructive="false", restore_prefix=None):
     """Reload safety and server modules to pick up monkeypatched env vars."""
     monkeypatch.setenv("BACKREST_URL", BASE_URL)
@@ -133,7 +144,7 @@ async def test_forget_correct_confirm_calls_api(monkeypatch):
 
 async def test_restore_outside_prefix_rejected(monkeypatch, tmp_path):
     """restore_snapshot with target outside allowed prefix → isError."""
-    (tmp_path / "restore").mkdir()
+    _private_dir(tmp_path / "restore")
     restore_prefix = str(tmp_path / "restore")
     mcp = _reload_server(
         monkeypatch, readonly="false", destructive="true", restore_prefix=restore_prefix
@@ -154,8 +165,7 @@ async def test_restore_outside_prefix_rejected(monkeypatch, tmp_path):
 
 async def test_restore_path_traversal_rejected(monkeypatch, tmp_path):
     """restore_snapshot with path traversal attempt → isError (realpath check)."""
-    restore_prefix = tmp_path / "restore"
-    restore_prefix.mkdir()
+    restore_prefix = _private_dir(tmp_path / "restore")
     mcp = _reload_server(
         monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
     )
@@ -176,8 +186,7 @@ async def test_restore_path_traversal_rejected(monkeypatch, tmp_path):
 
 async def test_restore_sibling_prefix_rejected(monkeypatch, tmp_path):
     """restore_snapshot with sibling directory name matching the prefix → isError (F-01)."""
-    restore_prefix = tmp_path / "restore"
-    restore_prefix.mkdir()
+    restore_prefix = _private_dir(tmp_path / "restore")
     sibling = tmp_path / "restore-evil"
     sibling.mkdir()
     mcp = _reload_server(
@@ -199,8 +208,7 @@ async def test_restore_sibling_prefix_rejected(monkeypatch, tmp_path):
 
 async def test_restore_valid_target_calls_api(monkeypatch, tmp_path):
     """restore_snapshot with valid target inside prefix → API call made."""
-    restore_prefix = tmp_path / "restore"
-    restore_prefix.mkdir()
+    restore_prefix = _private_dir(tmp_path / "restore")
     mcp = _reload_server(
         monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
     )
@@ -229,6 +237,7 @@ async def test_restore_sends_resolved_target(monkeypatch, tmp_path):
     restore_prefix = tmp_path / "restore"
     real_dir = restore_prefix / "real"
     real_dir.mkdir(parents=True)
+    _private_dir(restore_prefix)
     link = restore_prefix / "link"
     link.symlink_to(real_dir)
     audit = tmp_path / "audit.jsonl"
@@ -308,7 +317,7 @@ async def test_restore_prefix_world_writable_refused(monkeypatch, tmp_path):
     prefix.mkdir()
     prefix.chmod(0o777)
     data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
-    assert "group- or world-writable" in data["content"][0]["text"]
+    assert "must be mode 0700" in data["content"][0]["text"]
     assert calls == 0
 
 
@@ -317,13 +326,38 @@ async def test_restore_prefix_group_writable_refused(monkeypatch, tmp_path):
     prefix.mkdir()
     prefix.chmod(0o770)
     data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
-    assert "group- or world-writable" in data["content"][0]["text"]
+    assert "must be mode 0700" in data["content"][0]["text"]
     assert calls == 0
+
+
+@pytest.mark.parametrize("mode", [0o755, 0o750, 0o705, 0o740])
+async def test_restore_prefix_readable_by_others_refused(monkeypatch, tmp_path, mode):
+    """Not writable is not enough: restic restores modes, so others could read (F-03)."""
+    prefix = tmp_path / "restore"
+    prefix.mkdir()
+    prefix.chmod(mode)
+    data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    assert "must be mode 0700" in data["content"][0]["text"]
+    assert calls == 0
+
+
+async def test_restore_works_under_umask_0002(monkeypatch, tmp_path):
+    """forge's session umask is 0002; the fixtures must not depend on CI's 022 (F-02)."""
+    import os
+
+    old = os.umask(0o002)
+    try:
+        prefix = _private_dir(tmp_path / "restore")
+        data, calls = await _restore_into(monkeypatch, str(prefix), str(prefix / "x"))
+    finally:
+        os.umask(old)
+    assert "isError" not in data
+    assert calls == 1
 
 
 async def test_restore_prefix_foreign_owner_refused(monkeypatch, tmp_path):
     prefix = tmp_path / "restore"
-    prefix.mkdir(mode=0o700)
+    _private_dir(prefix)
     import os
 
     monkeypatch.setattr(os, "geteuid", lambda: os.stat(prefix).st_uid + 1)
@@ -334,7 +368,7 @@ async def test_restore_prefix_foreign_owner_refused(monkeypatch, tmp_path):
 
 async def test_restore_prefix_owned_0700_allowed(monkeypatch, tmp_path):
     prefix = tmp_path / "restore"
-    prefix.mkdir(mode=0o700)
+    _private_dir(prefix)
     data, calls = await _restore_into(monkeypatch, f"{prefix}/", str(prefix / "x"))
     assert "isError" not in data
     assert calls == 1

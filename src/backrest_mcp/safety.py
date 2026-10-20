@@ -50,7 +50,7 @@ ALLOW_DESTRUCTIVE = not READONLY and os.getenv("BACKREST_ALLOW_DESTRUCTIVE", "fa
 # Restore operations must write under this prefix. Prevents restoring over live data.
 # The default sits under the server user's home, not /tmp: in a world-writable directory
 # whoever creates the name first owns the boundary (#1182). check_restore_prefix() refuses
-# a prefix that is not a real directory owned by this user.
+# a prefix that is not a real 0700 directory owned by this user.
 RESTORE_ALLOWED_PREFIX = os.path.expanduser(
     os.getenv("BACKREST_RESTORE_ALLOWED_PREFIX", "~/backrest-restore/")
 )
@@ -60,9 +60,9 @@ def check_restore_prefix(prefix: str) -> str | None:
     """Return a fixed refusal message if ``prefix`` is not a safe restore boundary, else None.
 
     Refused: missing, a symlink, not a directory, not owned by this process's effective
-    uid, or group/world-writable. Only the last component is checked; its parents are the
-    operator's choice. The trailing slash is stripped first, because ``lstat("link/")``
-    follows the link.
+    uid, or any mode other than 0700 (no group or other bits). Only the last component is
+    checked; its parents are the operator's choice. The trailing slash is stripped first,
+    because ``lstat("link/")`` follows the link.
 
     This does not close the window after the check (#1182 part b): Backrest creates the
     target's components later, and a writer that shares this uid could swap one in between.
@@ -82,8 +82,10 @@ def check_restore_prefix(prefix: str) -> str | None:
         return "Restore prefix is not a directory."
     if st.st_uid != os.geteuid():
         return "Restore prefix is not owned by the server user."
-    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        return "Restore prefix is group- or world-writable."
+    if st.st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        # 0700, not merely "not writable": restic restores snapshot modes, so a tree whose
+        # privacy came from a 0700 parent would be readable under a 0755 prefix (audit p2 F-03).
+        return "Restore prefix must be mode 0700 (no group or other permissions)."
     return None
 
 

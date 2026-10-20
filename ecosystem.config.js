@@ -49,7 +49,7 @@ const env = {
   BACKREST_READONLY: "true",
   BACKREST_ALLOW_DESTRUCTIVE: "false",
   // Under ted's home, not /tmp (#1182). Must exist as a 0700 directory owned by ted;
-  // restore_snapshot refuses a missing, symlinked, foreign-owned or group/world-writable one.
+  // restore_snapshot refuses a missing, symlinked, foreign-owned or non-0700 one.
   BACKREST_RESTORE_ALLOWED_PREFIX: path.join(HOME, "backrest-restore") + "/",
   BACKREST_AUDIT_LOG: "/home/ted/logs/backrest-mcp-audit.jsonl",
   LOG_LEVEL: "INFO",

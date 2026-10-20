@@ -78,7 +78,7 @@ ecosystem.config.js  PM2 config (HTTP transport, BACKREST_READONLY=true default)
 | `BACKREST_PASSWORD` | — | Basic Auth password (optional) |
 | `BACKREST_READONLY` | `true` | Disable all write tools when true |
 | `BACKREST_ALLOW_DESTRUCTIVE` | `false` | Enable forget_snapshot + restore_snapshot |
-| `BACKREST_RESTORE_ALLOWED_PREFIX` | `~/backrest-restore/` | Restore target path guard; must be a real directory owned by the server user, not group/world-writable |
+| `BACKREST_RESTORE_ALLOWED_PREFIX` | `~/backrest-restore/` | Restore target path guard; must be a real 0700 directory owned by the server user |
 | `BACKREST_AUDIT_LOG` | — | JSONL audit log path for write ops |
 | `BACKREST_MCP_TRANSPORT` | `stdio` | `stdio` or `http` (loopback PM2 service) |
 | `BACKREST_MCP_HTTP_HOST` | `127.0.0.1` | http bind host (non-loopback refused unless override) |
@@ -103,7 +103,7 @@ Four layered controls gate write and destructive operations:
    Forces the caller to name the exact snapshot being deleted.
 
 4. **Restore path guard** — `restore_snapshot` refuses a prefix that is missing, a symlink,
-   not a directory, not owned by the server uid, or group/world-writable
+   not a directory, not owned by the server uid, or not mode 0700
    (`check_restore_prefix`, #1182), then validates `target` with `os.path.realpath()` against
    it. Path traversal attempts are blocked.
 

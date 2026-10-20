@@ -860,7 +860,7 @@ if ALLOW_DESTRUCTIVE:
         """Restore a snapshot (or a path within it) to a target directory.
 
         The target must be under BACKREST_RESTORE_ALLOWED_PREFIX (default: ~/backrest-restore/),
-        which must be a real directory owned by the server user and not group/world-writable.
+        which must be a real directory owned by the server user with mode 0700.
         This prevents accidental restores over live data. After verifying the restored files,
         move them to the desired location manually.
 
