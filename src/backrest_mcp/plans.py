@@ -25,6 +25,9 @@ import posixpath
 from typing import Any
 
 MAX_PATH_LENGTH = 4096
+# Matching is linear in components x pattern length, but a caller still chooses the path:
+# cap the components too, not only the characters ("/a" * 2048 is 4096 characters).
+MAX_PATH_COMPONENTS = 256
 
 # Default staleness threshold for cron schedules, which this module does not parse.
 CRON_STALE_HOURS = 26.0
@@ -39,24 +42,36 @@ def normalise_path(path: Any) -> str:
     if "\x00" in path:
         raise ValueError("path contains a NUL byte")
     # normpath keeps a leading "//"; collapse it so "//etc" and "/etc" compare equal.
-    return "/" + posixpath.normpath(path).lstrip("/")
+    norm = "/" + posixpath.normpath(path).lstrip("/")
+    if len(_components(norm)) > MAX_PATH_COMPONENTS:
+        raise ValueError(f"path has more than {MAX_PATH_COMPONENTS} components")
+    return norm
 
 
 def _components(path: str) -> list[str]:
     return [c for c in path.split("/") if c]
 
 
-def _match_parts(pat: list[str], parts: list[str]) -> bool:
-    if not pat:
-        return not parts
-    head, rest = pat[0], pat[1:]
-    if head == "**":
-        return any(_match_parts(rest, parts[i:]) for i in range(len(parts) + 1))
-    return bool(parts) and fnmatch.fnmatchcase(parts[0], head) and _match_parts(rest, parts[1:])
+def _closure(pat: list[str], states: set[int]) -> set[int]:
+    """Add the states reachable by letting a ``**`` match zero components."""
+    out = set(states)
+    stack = list(states)
+    while stack:
+        i = stack.pop()
+        if i < len(pat) and pat[i] == "**" and i + 1 not in out:
+            out.add(i + 1)
+            stack.append(i + 1)
+    return out
 
 
 def pattern_matches(pattern: str, path: str, *, ignore_case: bool = False) -> bool:
-    """True if ``pattern`` excludes ``path`` (or one of its ancestors)."""
+    """True if ``pattern`` excludes ``path`` (or one of its ancestors).
+
+    Walks the path's components once, tracking every pattern position still alive (an
+    NFA), so the cost is linear in components x pattern length. The recursive matcher it
+    replaces re-matched every ancestor and branched on each ``**``: cubic for the common
+    ``**/name`` form (pre-audit baseline, IV-47).
+    """
     if not pattern or pattern.startswith("!"):
         return False
     if ignore_case:
@@ -64,9 +79,24 @@ def pattern_matches(pattern: str, path: str, *, ignore_case: bool = False) -> bo
     pat = _components(pattern)
     if not pattern.startswith("/"):
         pat = ["**", *pat]
-    parts = _components(path)
-    # An excluded directory excludes its contents: try the path and every ancestor.
-    return any(_match_parts(pat, parts[:n]) for n in range(1, len(parts) + 1))
+    end = len(pat)
+    states = _closure(pat, {0})
+    for part in _components(path):
+        step: set[int] = set()
+        for i in states:
+            if i == end:
+                continue
+            if pat[i] == "**":
+                step.add(i)
+            elif fnmatch.fnmatchcase(part, pat[i]):
+                step.add(i + 1)
+        states = _closure(pat, step)
+        # An excluded directory excludes its contents: accept on this path or any ancestor.
+        if end in states:
+            return True
+        if not states:
+            return False
+    return False
 
 
 def _strings(value: Any) -> list[str]:

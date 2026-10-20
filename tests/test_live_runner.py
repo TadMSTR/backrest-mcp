@@ -24,6 +24,7 @@ def test_reads_only_backrest_keys(tmp_path):
         "GITEA_TOKEN=not-for-us\n"
         "BACKREST_NOEQUALS\n"
         "  BACKREST_URL = http://localhost:9898  \n"
+        "BACKREST_MCP_AUTH_TOKEN=not-needed-by-the-tests\n"
     )
     assert runner.read_backrest_env(env) == {
         "BACKREST_USERNAME": "ted",

@@ -30,7 +30,8 @@
   `excludes`/`iexcludes` pattern that drops it. Pure string matching that approximates
   restic's exclude rules (anchored, unanchored basename, `*`, `?`, `[...]`, `**`,
   case-insensitive `iexcludes`; no negation or exclude files); the response says
-  `"match": "approximate"`.
+  `"match": "approximate"`. Paths are capped at 4096 characters and 256 components, and
+  matching is linear in components × pattern length.
 - **`get_backup_freshness(max_age_hours?)`**: per plan, the last backup that ended
   `SUCCESS` or `WARNING`, its age, the latest backup status, and `ok`/`stale`/`unscheduled`.
   The threshold is the argument, else 2× `maxFrequencyHours`, 2× `maxFrequencyDays`, or
@@ -54,7 +55,7 @@
   top-level `permissions: contents: read` in every workflow, gitleaks secret scanning
   (push, PR, weekly full history), CodeQL, OSSF Scorecard, CODEOWNERS, Dependabot for `uv`
   and `github-actions`, ruff with `E F W I UP B SIM RUF` plus `ruff format`, and a coverage
-  floor of 96% (measured 96.18%).
+  floor of 96% (measured 96.27%).
 - `.gitignore`: `*.key`, `*.pem`, `*.p12`, `*.pfx`; the bare `core.*` (which also matched
   `core.py`) is now `/core` and `core.[0-9]*` (vikunja#581).
 

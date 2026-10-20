@@ -103,7 +103,7 @@ uv run --frozen --no-sync pytest --cov=backrest_mcp
 ```
 
 The live conformance tests run against a real Backrest. `scripts/run_live_conformance.py`
-reads `BACKREST_*` from the file named by `BACKREST_LIVE_ENV_FILE` (default
+reads the `BACKREST_*` credentials it needs from the file named by `BACKREST_LIVE_ENV_FILE` (default
 `~/.secrets/forge.env`) inside the process, so no credential is ever on a command line. It
 exits non-zero if any live test fails or if every test skipped.
 

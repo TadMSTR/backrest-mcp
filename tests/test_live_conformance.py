@@ -6,10 +6,10 @@ the deployed instance to catch connect-rpc field-name drift that the mock tests 
 
     python scripts/run_live_conformance.py
 
-The wrapper reads BACKREST_* from the file named by BACKREST_LIVE_ENV_FILE (default
-~/.secrets/forge.env) inside the process, so no credential is ever on a command line, and
-runs this file with ``-p no:cacheprovider --tb=line``. ``--tb=line`` keeps traceback locals
-(which can hold config data) out of the output.
+The wrapper reads the BACKREST_* credentials it needs from the file named by
+BACKREST_LIVE_ENV_FILE (default ~/.secrets/forge.env) inside the process, so no credential
+is ever on a command line, and runs this file with ``-p no:cacheprovider --tb=line``.
+``--tb=line`` keeps traceback locals (which can hold config data) out of the output.
 
 Every secret check is computed first and asserted as a bool with a fixed message: pytest's
 assertion rewriting prints both operands of a failing comparison.

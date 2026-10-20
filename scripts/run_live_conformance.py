@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run tests/test_live_conformance.py against the live Backrest, with credentials kept off argv.
 
-Reads every ``BACKREST_*`` variable from the env file named by ``BACKREST_LIVE_ENV_FILE``
+Reads the four ``BACKREST_*`` variables the live tests use (``LIVE_KEYS``) from the env file
+named by ``BACKREST_LIVE_ENV_FILE``
 (default ``~/.secrets/forge.env``) inside this process and hands them to pytest through the
 child's environment. Nothing secret is ever on a command line, in this script's output, or
 in pytest's (the live tests assert on bools with fixed messages, and run with
@@ -29,10 +30,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 LIVE_FILE = "tests/test_live_conformance.py"
 DEFAULT_ENV_FILE = "~/.secrets/forge.env"
+# Only what the live tests need. forge.env holds other BACKREST_* secrets (the MCP bearer
+# token) that the child has no use for.
+LIVE_KEYS = frozenset(
+    {"BACKREST_URL", "BACKREST_USERNAME", "BACKREST_PASSWORD", "BACKREST_REPO_PASSWORD"}
+)
 
 
 def read_backrest_env(path: Path) -> dict[str, str]:
-    """``BACKREST_*`` assignments from a dotenv-style file. Other keys are ignored."""
+    """The ``LIVE_KEYS`` assignments from a dotenv-style file. Other keys are ignored."""
     found: dict[str, str] = {}
     for line in path.read_text().splitlines():
         line = line.strip()
@@ -41,7 +47,7 @@ def read_backrest_env(path: Path) -> dict[str, str]:
         line = line.removeprefix("export ").strip()
         key, sep, value = line.partition("=")
         key = key.strip()
-        if not sep or not key.startswith("BACKREST_"):
+        if not sep or key not in LIVE_KEYS:
             continue
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
@@ -85,7 +91,7 @@ def main() -> int:
     except OSError as e:
         print(f"cannot read env file {env_file}: {e.strerror}", file=sys.stderr)
         return 2
-    print(f"env file: {env_file} ({len(creds)} BACKREST_* keys: {', '.join(sorted(creds))})")
+    print(f"env file: {env_file} ({len(creds)} keys: {', '.join(sorted(creds))})")
 
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "live.xml"

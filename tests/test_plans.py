@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import fnmatch
+import random
+import time
+
 import pytest
 
 from backrest_mcp.plans import (
     CRON_STALE_HOURS,
+    MAX_PATH_COMPONENTS,
     MAX_PATH_LENGTH,
     covering_root,
     excluded_by,
@@ -66,7 +71,17 @@ def test_normalise_path(raw, expected):
 
 
 @pytest.mark.parametrize(
-    "raw", ["", "relative/path", "~/x", None, 5, "/a\x00b", "/" + "a" * MAX_PATH_LENGTH]
+    "raw",
+    [
+        "",
+        "relative/path",
+        "~/x",
+        None,
+        5,
+        "/a\x00b",
+        "/" + "a" * MAX_PATH_LENGTH,
+        "/a" * (MAX_PATH_COMPONENTS + 1),
+    ],
 )
 def test_normalise_path_rejects(raw):
     with pytest.raises(ValueError):
@@ -118,3 +133,59 @@ def test_excluded_by_checks_excludes_then_iexcludes():
 )
 def test_stale_threshold(schedule, max_age, expected):
     assert stale_threshold(schedule, max_age) == expected
+
+
+def test_component_cap_boundary():
+    assert normalise_path("/a" * MAX_PATH_COMPONENTS) == "/a" * MAX_PATH_COMPONENTS
+
+
+@pytest.mark.parametrize("pattern", ["**/node_modules", "node_modules", "/**/**/**/x", "*/*/*/x"])
+def test_matching_is_fast_at_the_component_cap(pattern):
+    """Pre-audit IV-47: the recursive matcher took ~3.4 s for `**/x` at 400 components."""
+    path = "/a" * MAX_PATH_COMPONENTS
+    t0 = time.perf_counter()
+    for _ in range(10):
+        pattern_matches(pattern, path)
+    assert time.perf_counter() - t0 < 1.0
+
+
+def _reference(pattern, path, ignore_case=False):
+    """The original recursive matcher, kept as an oracle for the linear one."""
+
+    def comps(p):
+        return [c for c in p.split("/") if c]
+
+    def match(pat, parts):
+        if not pat:
+            return not parts
+        head, rest = pat[0], pat[1:]
+        if head == "**":
+            return any(match(rest, parts[i:]) for i in range(len(parts) + 1))
+        return bool(parts) and fnmatch.fnmatchcase(parts[0], head) and match(rest, parts[1:])
+
+    if not pattern or pattern.startswith("!"):
+        return False
+    if ignore_case:
+        pattern, path = pattern.lower(), path.lower()
+    pat = comps(pattern)
+    if not pattern.startswith("/"):
+        pat = ["**", *pat]
+    parts = comps(path)
+    return any(match(pat, parts[:n]) for n in range(1, len(parts) + 1))
+
+
+def test_linear_matcher_agrees_with_the_recursive_one():
+    rng = random.Random(1182)
+    atoms = ["a", "b", "ab", "A", "*", "?", "**", "[ab]", "a*", "*b"]
+    names = ["a", "b", "ab", "A", "ba", "abc"]
+    for _ in range(4000):
+        pattern = "/".join(rng.choice(atoms) for _ in range(rng.randint(1, 4)))
+        if rng.random() < 0.5:
+            pattern = "/" + pattern
+        path = "/" + "/".join(rng.choice(names) for _ in range(rng.randint(1, 6)))
+        ic = rng.random() < 0.3
+        assert pattern_matches(pattern, path, ignore_case=ic) == _reference(pattern, path, ic), (
+            pattern,
+            path,
+            ic,
+        )

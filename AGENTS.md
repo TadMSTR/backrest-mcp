@@ -63,7 +63,7 @@ tests/
   check_action_pins.py     Two-sided action-pin consistency gate (CI)
   test_live_conformance.py Live :9898 conformance (skipped unless BACKREST_LIVE_TEST=1)
 scripts/
-  run_live_conformance.py  Live tests with BACKREST_* read in-process from BACKREST_LIVE_ENV_FILE
+  run_live_conformance.py  Live tests with the BACKREST_* credentials read in-process from BACKREST_LIVE_ENV_FILE
 pyproject.toml
 uv.lock              Locked dependency set; CI installs with uv sync --frozen
 ecosystem.config.js  PM2 config (HTTP transport, BACKREST_READONLY=true default)

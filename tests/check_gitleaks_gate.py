@@ -44,7 +44,8 @@ REPO = Path(__file__).resolve().parent.parent
 # THE BODY MUST HAVE REAL ENTROPY. This was originally 36 repeated 'A's, which read as
 # obviously-not-a-credential and was wrong for a reason worth recording:
 #
-#   gitleaks 8.28.0 (the version this repo pins) applies an ENTROPY FLOOR to the
+#   gitleaks 8.28.0 (the version loki-mcp, where this probe comes from, pinned then;
+#   secret-scan.yml here pins 8.30.1; floor not re-measured) applies an ENTROPY FLOOR to the
 #   github-pat rule. Measured 2026-09-20: 'ghp_' + 'A'*36 scores 0.67 and is NOT
 #   reported, while the string below scores 5.22 and is. The forge host's own
 #   /usr/bin/gitleaks — which reports `version is set by build process` — has no such
@@ -77,7 +78,8 @@ SKIP = shutil.ignore_patterns(
 # errored before reading anything, which is the exact false-green this probe exists
 # to prevent. --exit-code moves findings off 1 and leaves 1 meaning error alone.
 #
-# MEASURED against the pinned 8.28.0, 2026-09-20:
+# MEASURED against 8.28.0 on 2026-09-20 (loki-mcp); planted -> 42 and clean -> 0
+# re-measured against 8.30.1 for this repo on 2026-10-20:
 #   planted secret        -> 42
 #   clean tree            -> 0
 #   --source nonexistent  -> 1
