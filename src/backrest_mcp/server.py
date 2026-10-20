@@ -355,7 +355,9 @@ async def get_backup_freshness(max_age_hours: float | None = None) -> dict:
       - "ok": a good backup within the threshold
       - "stale": none within the threshold, or none among the plan's last 200 operations
       - "unscheduled": the schedule is disabled or missing; never stale
-    `stale` is true only for "stale". Read-only.
+    `stale` is true only for "stale". The response carries `stale_count` and
+    `unscheduled_count`: a disabled schedule produces no backups and is never counted as
+    stale, so anything alerting on freshness should look at both. Read-only.
     """
     if max_age_hours is not None and not (0 < max_age_hours <= 24 * 366):
         return _tool_error(
@@ -411,6 +413,9 @@ async def get_backup_freshness(max_age_hours: float | None = None) -> dict:
         return {
             "plans": out,
             "stale_count": sum(1 for p in out if p["stale"]),
+            # Reported beside stale_count so a monitor cannot read "backups stopped because
+            # the schedule was turned off" as healthy (audit p2 F-05).
+            "unscheduled_count": sum(1 for p in out if p["state"] == "unscheduled"),
             "checked_at": _fmt_ms(int(now_ms)),
         }
     except Exception as e:

@@ -627,6 +627,7 @@ async def test_freshness_threshold_boundaries(frozen_now, schedule, hours_ago, s
     assert plan["stale"] is (state == "stale")
     assert plan["age_hours"] == round(hours_ago, 2)
     assert data["stale_count"] == (1 if state == "stale" else 0)
+    assert data["unscheduled_count"] == (1 if state == "unscheduled" else 0)
 
 
 async def test_freshness_argument_overrides_schedule(frozen_now):

@@ -177,12 +177,18 @@ async def test_live_find_plan_for_path(mcp_server):
 async def test_live_get_backup_freshness(mcp_server):
     raw = (await mcp_server.call_tool("get_backup_freshness", {})).content[0].text
     errored, leaked = _secret_free(raw)
-    plans = [] if errored else json.loads(raw).get("plans", [])
+    data = {} if errored else json.loads(raw)
+    plans = data.get("plans", [])
     del raw
     assert not errored, "get_backup_freshness returned an error"
     assert not leaked, "get_backup_freshness output carries a password or env key"
     states = {p.get("state") for p in plans}
-    ok_shape = bool(plans) and states <= {"ok", "stale", "unscheduled"}
+    ok_shape = (
+        bool(plans)
+        and states <= {"ok", "stale", "unscheduled"}
+        and isinstance(data.get("stale_count"), int)
+        and isinstance(data.get("unscheduled_count"), int)
+    )
     assert ok_shape, "get_backup_freshness returned no plans or an unknown state"
 
 

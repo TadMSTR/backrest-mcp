@@ -17,7 +17,7 @@ browsing snapshot contents, triggering backups, running repo maintenance tasks, 
 - `get_config()` — Secret-free allowlist projection of the Backrest config (`redact.py`); never returns repo passwords, env values, flags, hook targets or the multihost block
 - `list_plans()` — Projected plans (paths, excludes, repo, schedule, retention); prefer to `get_config` for coverage questions
 - `find_plan_for_path(path)` — Plans covering an absolute path, with the first matching exclude; approximate restic matching, pure string ops
-- `get_backup_freshness(max_age_hours?)` — Per plan: last SUCCESS/WARNING backup, age, latest status, `ok`/`stale`/`unscheduled`
+- `get_backup_freshness(max_age_hours?)` — Per plan: last SUCCESS/WARNING backup, age, latest status, `ok`/`stale`/`unscheduled`; returns `stale_count` and `unscheduled_count` (a disabled schedule is never stale, so monitor both)
 - `list_snapshots(repo_id?, plan_id?)` — List snapshots; no args → enumerate all repos, tag each
 - `list_snapshot_files(repo_id, snapshot_id, path?)` — Browse files (repo_id resolved to GUID internally)
 - `get_summary()` — 30-day dashboard stats per repo and plan

@@ -16,7 +16,7 @@ Python/FastMCP rewrite of `backrest-mcp-server`. Covers the full useful surface 
 | `get_config` | Read a secret-free projection of the Backrest configuration (repos, plans) | — |
 | `list_plans` | Each plan's paths, excludes, repo, schedule and retention (secret-free) | — |
 | `find_plan_for_path` | Which plans cover an absolute path, and which exclude pattern drops it (approximate restic matching) | — |
-| `get_backup_freshness` | Per plan: last good backup, age, latest status, stale / ok / unscheduled | — |
+| `get_backup_freshness` | Per plan: last good backup, age, latest status, stale / ok / unscheduled; `stale_count` and `unscheduled_count` | — |
 | `list_snapshots` | List snapshots; no args → all repos merged | — |
 | `list_snapshot_files` | Browse files within a snapshot (by `repo_id`) | — |
 | `get_summary` | 30-day dashboard stats per repo and plan | — |
