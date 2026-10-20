@@ -76,13 +76,15 @@ def strip_userinfo(uri: str) -> str:
     (``rest:https://u:p@h/repo``, ``s3:https://u:p@h/bucket``) by string handling, since
     ``urllib.parse.urlsplit`` does not parse ``rest:https://…`` as a URL.
 
-    The authority is everything between ``://`` and the next ``/``. If it holds an ``@``,
-    the part up to its last ``@`` is dropped. If the authority has no ``@`` but the rest of
-    the URI does (for example a password containing an unencoded ``/``), the boundary is
-    ambiguous, so everything after ``://`` is replaced with ``[REDACTED]``. This fails safe.
+    Userinfo is decided on everything after ``://``, before anything else is cut. If that
+    text holds an ``@``, the part before the last ``@`` must be a clean userinfo, with no
+    ``/``, ``?`` or ``#``. Then it is dropped. Otherwise the boundary is ambiguous: for
+    example a password with an unencoded ``/``, ``?`` or ``#``, or an ``@`` in the path. In
+    that case everything after ``://`` is replaced with ``[REDACTED]``. This over-redacts a
+    URI with ``@`` in its path rather than risk returning part of a password.
 
-    A query string or fragment on a URL-shaped URI is replaced with ``?[REDACTED]``, since
-    tokens are sometimes passed there.
+    After userinfo is removed, a query string or fragment is replaced with ``?[REDACTED]``,
+    since tokens are sometimes passed there.
 
     A URI without ``://`` that contains ``=`` is redacted after its backend prefix. This
     catches restic's ``rclone:`` backend with an inline rclone connection string
@@ -103,15 +105,15 @@ def strip_userinfo(uri: str) -> str:
         return f"{head}:{REDACTED}" if sep and head and "/" not in head else REDACTED
     prefix, rest = uri.split("://", 1)
     prefix += "://"
+    # Decide userinfo on the whole remainder first: cutting at "?" or "#" before looking for
+    # "@" would cut a password that contains one and return its prefix (audit F-01).
+    if "@" in rest:
+        userinfo, rest = rest.rsplit("@", 1)
+        if any(c in userinfo for c in "/?#"):
+            return prefix + REDACTED
     for mark in ("?", "#"):
         if mark in rest:
             rest = rest.split(mark, 1)[0] + "?" + REDACTED
-    slash = rest.find("/")
-    authority, path = (rest, "") if slash == -1 else (rest[:slash], rest[slash:])
-    if "@" in authority:
-        return prefix + authority.rsplit("@", 1)[1] + path
-    if "@" in path:
-        return prefix + REDACTED
     return prefix + rest
 
 

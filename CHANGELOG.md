@@ -15,15 +15,21 @@
   future Backrest adds is never returned. Secret-bearing fields are replaced by safe
   summaries: `envKeys` (names only), `hasPassword`, `flagCount`, `backupFlagCount`, and
   each hook's action *type*. Repo URIs lose `user:password@` userinfo and any query
-  string. A non-URL URI containing `=`, such as restic's `rclone:` backend with an inline
+  string or fragment. Where the userinfo boundary is ambiguous (an unencoded `/`, `?` or
+  `#` before the last `@`, or an `@` in the path), everything after `://` is redacted
+  instead. A non-URL URI containing `=`, such as restic's `rclone:` backend with an inline
   rclone connection string (`access_key_id=…,secret_access_key=…`), is redacted after its
   backend prefix.
   Operators who called `get_config` on an earlier version should treat the repo password
   as disclosed to that session's transcript and any LLM tracing.
-- **`restore_snapshot` checked `realpath(target)` but sent the raw `target`.** A symlink
-  re-pointed between the prefix check and the restore could redirect it outside
-  `BACKREST_RESTORE_ALLOWED_PREFIX`. The resolved path is now sent to Backrest and recorded
-  in the audit log.
+- **`restore_snapshot` checked `realpath(target)` but sent the raw `target`.** The
+  resolved path is now sent to Backrest and recorded in the audit log. This defeats a
+  symlink that already exists at the target path when the check runs. It **narrows** the
+  check-to-restore race; it does not close it. Backrest creates the target afterwards, so
+  a directory component under the prefix can still be swapped in between. The prefix
+  itself, by default in world-writable `/tmp`, is resolved without an ownership check.
+  Both remain open (tracked separately). `restore_snapshot` is registered only when
+  `BACKREST_ALLOW_DESTRUCTIVE=true`.
 
 ### Tests
 

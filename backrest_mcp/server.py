@@ -187,10 +187,10 @@ async def get_config() -> dict:
 
     Returns an allowlist projection, not the raw config:
       - top level: modno, version, instance
-      - repos: id, guid, uri (with any user:password@ removed), autoUnlock,
-        autoInitialize, shared, originInstanceId, prune/check/forget policies,
-        commandPrefix, envKeys (variable names only), hasPassword (bool),
-        flagCount (int), hooks
+      - repos: id, guid, uri (user:password@ and query removed; fully redacted if
+        ambiguous), autoUnlock, autoInitialize, shared, originInstanceId,
+        prune/check/forget policies, commandPrefix, envKeys (variable names only),
+        hasPassword (bool), flagCount (int), hooks
       - plans: id, repo, paths, excludes, iexcludes, schedule, retention,
         skipIfUnchanged, backupFlagCount (int), hooks
       - hooks: conditions, onError, and action (the action type name only)

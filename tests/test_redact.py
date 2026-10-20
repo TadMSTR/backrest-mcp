@@ -32,9 +32,23 @@ def test_strip_userinfo(uri, expected):
     assert strip_userinfo(uri) == expected
 
 
-def test_strip_userinfo_ambiguous_boundary_fails_safe():
-    """An unencoded '/' in the password hides the '@' from the authority: redact it all."""
-    assert strip_userinfo("rest:https://u:pa/ss@h/repo") == "rest:https://[REDACTED]"
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "rest:https://u:pa/ss@h/repo",
+        # audit F-01: '?' or '#' inside the password must not cut the userinfo short
+        "rest:https://user:SECRETa?b@host:8000/repo",
+        "rest:https://user:SECRETa#b@host/repo",
+        "rest:https://user:SEC/RET?x@host/repo",
+        # '@' in the path is indistinguishable from one in a password: over-redact
+        "rest:https://u:p@h/a@b",
+    ],
+)
+def test_strip_userinfo_ambiguous_boundary_fails_safe(uri):
+    """An unencoded '/', '?' or '#' before the last '@' makes the boundary ambiguous."""
+    out = strip_userinfo(uri)
+    assert out == uri.split("://", 1)[0] + "://[REDACTED]"
+    assert "SECRET" not in out and "SEC" not in out
 
 
 def test_project_config_tolerates_empty_and_malformed_input():
