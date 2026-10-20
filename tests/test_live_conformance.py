@@ -6,8 +6,11 @@ the deployed instance to catch connect-rpc field-name drift that the mock tests 
 
     BACKREST_LIVE_TEST=1 \
     BACKREST_URL=http://localhost:9898 \
-    BACKREST_USERNAME=... BACKREST_PASSWORD=... \
-    pytest -q tests/test_live_conformance.py
+    BACKREST_USERNAME=... BACKREST_PASSWORD=... BACKREST_REPO_PASSWORD=... \
+    pytest -q -p no:cacheprovider --tb=line tests/test_live_conformance.py
+
+Load the credentials from a file inside the process or a wrapper, not on the command line.
+``--tb=line`` keeps traceback locals (which can hold config data) out of the output.
 
 They mirror the "Verification / Live conformance check" section of the v0.3.0 build plan.
 """
@@ -91,3 +94,23 @@ async def test_live_list_snapshot_files(mcp_server):
     ))
     assert "error" not in files, files
     assert "entries" in files
+
+
+async def test_live_get_config_omits_repo_password(mcp_server):
+    """get_config must never return the restic repo password (#1176).
+
+    Reads the expected secret from BACKREST_REPO_PASSWORD; skipped when unset. The assert
+    is written so that a failure cannot print the secret: pytest's assertion rewriting
+    shows both operands, so compare first and assert on the bool with a fixed message.
+    Run this file with ``-p no:cacheprovider --tb=line``.
+    """
+    import json
+    secret = os.environ.get("BACKREST_REPO_PASSWORD", "")
+    if not secret:
+        pytest.skip("BACKREST_REPO_PASSWORD not set")
+    raw = (await mcp_server.call_tool("get_config", {})).content[0].text
+    errored = "error" in json.loads(raw)
+    leaked = secret in raw
+    del raw, secret
+    assert not errored, "get_config returned an error"
+    assert not leaked, "repo password present in get_config output"

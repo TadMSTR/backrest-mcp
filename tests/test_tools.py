@@ -58,6 +58,72 @@ def _config_response(repos=None):
     }
 
 
+def _config_with_secrets():
+    """A v1.13.0-shaped config with a secret in every field that can hold one.
+
+    Every secret value contains LEAKCANARY, so one substring check catches a field the
+    projection forgot (#1176).
+    """
+    hook_actions = {
+        "actionCommand": {"command": "curl -H 'X-Token: LEAKCANARY-cmd' https://h/"},
+        "actionWebhook": {"webhookUrl": "https://h/hook/LEAKCANARY-webhook", "method": "POST",
+                          "template": "LEAKCANARY-tpl"},
+        "actionDiscord": {"webhookUrl": "https://discord.com/api/webhooks/LEAKCANARY-discord"},
+        "actionGotify": {"baseUrl": "https://gotify/", "token": "LEAKCANARY-gotify"},
+        "actionSlack": {"webhookUrl": "https://hooks.slack.com/LEAKCANARY-slack"},
+        "actionShoutrrr": {"shoutrrrUrl": "telegram://LEAKCANARY-shoutrrr@telegram"},
+        "actionHealthchecks": {"webhookUrl": "https://hc/ping/LEAKCANARY-hc"},
+        "actionTelegram": {"botToken": "LEAKCANARY-telegram", "chatId": "1"},
+    }
+    return {
+        "modno": 42,
+        "version": 6,
+        "instance": "forge",
+        "repos": [{
+            "id": REPO_ID,
+            "guid": REPO_GUID,
+            "uri": "rest:https://u:LEAKCANARY-uri@host/repo",
+            "password": "LEAKCANARY-repo-password",
+            "env": [
+                "AWS_ACCESS_KEY_ID=LEAKCANARY-akid",
+                "AWS_SECRET_ACCESS_KEY=LEAKCANARY-aws",
+                "B2_ACCOUNT_KEY=LEAKCANARY-b2",
+            ],
+            "flags": ["--password-command=echo LEAKCANARY-flag", "-o", "s3.key=LEAKCANARY-o"],
+            "prunePolicy": {"schedule": {"cron": "0 3 * * 0"}, "maxUnusedPercent": 10},
+            "checkPolicy": {"schedule": {"maxFrequencyDays": 30}, "structureOnly": True},
+            "autoUnlock": True,
+            "hooks": [
+                {"conditions": ["CONDITION_ANY_ERROR"], "onError": "ON_ERROR_IGNORE", k: v}
+                for k, v in hook_actions.items()
+            ],
+            "futureSecretField": "LEAKCANARY-future",
+        }],
+        "plans": [{
+            "id": "forge-system",
+            "repo": REPO_ID,
+            "paths": ["/home/ted/Documents", "/etc"],
+            "excludes": ["*.tmp"],
+            "schedule": {"cron": "0 2 * * *", "clock": "CLOCK_LOCAL"},
+            "retention": {"policyTimeBucketed": {"daily": 7, "weekly": 4}},
+            "backup_flags": ["--exclude-caches", "--password-file=LEAKCANARY-bflag"],
+            "hooks": [{
+                "conditions": ["CONDITION_SNAPSHOT_SUCCESS"],
+                "actionHealthchecks": {"webhookUrl": "https://hc/ping/LEAKCANARY-plan-hc"},
+            }],
+        }],
+        "auth": {
+            "disabled": False,
+            "users": [{"name": "ted", "passwordBcrypt": "LEAKCANARY-bcrypt"}],
+        },
+        "sync": {
+            "identity": {"keyid": "k", "ed25519priv": "LEAKCANARY-identity"},
+            "pairingTokens": [{"secret": "LEAKCANARY-pairing", "label": "l"}],
+            "knownHosts": [{"instanceId": "atlas", "initialPairingSecret": "LEAKCANARY-known"}],
+        },
+    }
+
+
 def _connect_stream(chunks):
     """Encode text chunks as a Connect server-streaming response of BytesValue frames."""
     out = bytearray()
@@ -101,6 +167,74 @@ async def test_get_health_unreachable(mcp_server):
         )
         result = await mcp_server.call_tool("get_health", {})
     assert "unreachable" in result.content[0].text
+
+
+# ---------------------------------------------------------------------------
+# get_config — allowlist projection (#1176)
+# ---------------------------------------------------------------------------
+
+async def _get_config(mcp_server, cfg):
+    with respx.mock() as mock:
+        mock.post(f"{BASE_URL}/v1.Backrest/GetConfig").mock(
+            return_value=httpx.Response(200, json=cfg)
+        )
+        result = await mcp_server.call_tool("get_config", {})
+    return json.loads(result.content[0].text)
+
+
+async def test_get_config_leaks_no_secret(mcp_server):
+    """Load-bearing: any secret field that reaches the output carries LEAKCANARY."""
+    data = await _get_config(mcp_server, _config_with_secrets())
+    assert "LEAKCANARY" not in json.dumps(data)
+
+
+async def test_get_config_keeps_useful_fields(mcp_server):
+    """The projection is not an empty dict: the fields agents need survive."""
+    data = await _get_config(mcp_server, _config_with_secrets())
+    assert data["version"] == 6
+    assert data["instance"] == "forge"
+    repo = data["repos"][0]
+    assert repo["id"] == REPO_ID
+    assert repo["guid"] == REPO_GUID
+    assert repo["uri"] == "rest:https://host/repo"
+    assert repo["envKeys"] == ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "B2_ACCOUNT_KEY"]
+    assert repo["hasPassword"] is True
+    assert repo["flagCount"] == 3
+    assert repo["prunePolicy"]["maxUnusedPercent"] == 10
+    assert [h["action"] for h in repo["hooks"]] == [
+        "actionCommand", "actionWebhook", "actionDiscord", "actionGotify",
+        "actionSlack", "actionShoutrrr", "actionHealthchecks", "actionTelegram",
+    ]
+    assert repo["hooks"][0] == {
+        "conditions": ["CONDITION_ANY_ERROR"], "onError": "ON_ERROR_IGNORE", "action": "actionCommand",
+    }
+    plan = data["plans"][0]
+    assert plan["paths"] == ["/home/ted/Documents", "/etc"]
+    assert plan["schedule"] == {"cron": "0 2 * * *", "clock": "CLOCK_LOCAL"}
+    assert plan["retention"] == {"policyTimeBucketed": {"daily": 7, "weekly": 4}}
+    assert plan["backupFlagCount"] == 2
+    assert plan["hooks"][0]["action"] == "actionHealthchecks"
+    assert data["auth"] == {"disabled": False, "users": [{"name": "ted"}]}
+
+
+async def test_get_config_drops_unknown_and_secret_keys(mcp_server):
+    """Keys not on the allowlist are absent, including ones Backrest does not have yet."""
+    data = await _get_config(mcp_server, _config_with_secrets())
+    repo = data["repos"][0]
+    for key in ("futureSecretField", "password", "env", "flags"):
+        assert key not in repo
+    assert "backup_flags" not in data["plans"][0]
+    assert "sync" not in data
+    assert "passwordBcrypt" not in data["auth"]["users"][0]
+
+
+async def test_get_config_backend_error_is_generic(mcp_server):
+    with respx.mock() as mock:
+        mock.post(f"{BASE_URL}/v1.Backrest/GetConfig").mock(return_value=httpx.Response(500))
+        result = await mcp_server.call_tool("get_config", {})
+    assert json.loads(result.content[0].text) == {
+        "error": "tool call failed — check server logs for details"
+    }
 
 
 # ---------------------------------------------------------------------------

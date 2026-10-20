@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.4.1] — 2026-10-20
+
+### Security
+
+- **`get_config` returned the restic repository password in cleartext** (vikunja#1176).
+  It passed Backrest's `GetConfig` response through unchanged, and Backrest v1.13.0 masks
+  only `auth.users[].passwordBcrypt`. `repos[].password`, `repos[].env` values,
+  credential-bearing `uri` userinfo, restic `flags`, hook targets (webhook URLs, Gotify and
+  Telegram tokens, commands) and the multihost `sync` block (private identity, pairing
+  secrets) all reached the caller. Its docstring said "Does not expose credentials".
+  `get_config` now returns an **allowlist projection** built by the new pure module
+  `backrest_mcp/redact.py`. Unknown keys are dropped by construction, so a secret field a
+  future Backrest adds is never returned. Secret-bearing fields are replaced by safe
+  summaries: `envKeys` (names only), `hasPassword`, `flagCount`, `backupFlagCount`, and
+  each hook's action *type*.
+  Operators who called `get_config` on an earlier version should treat the repo password
+  as disclosed to that session's transcript and any LLM tracing.
+- **`restore_snapshot` checked `realpath(target)` but sent the raw `target`.** A symlink
+  re-pointed between the prefix check and the restore could redirect it outside
+  `BACKREST_RESTORE_ALLOWED_PREFIX`. The resolved path is now sent to Backrest and recorded
+  in the audit log.
+
+### Tests
+
+- Canary fixture with `LEAKCANARY` in every secret-bearing v1.13.0 field, plus
+  field-presence and unknown-key tests. The tests fail against v0.4.0.
+- Live test `test_live_get_config_omits_repo_password` (needs `BACKREST_REPO_PASSWORD`). It
+  was run against v0.4.0 and failed as expected, then passed on the fix. Its assertion is
+  written so that a failure never prints the secret.
+
 ## [0.4.0] — 2026-08-30
 
 Telemetry that fails is now visible. Ports the fixes proven in dockhand-mcp v0.4.0

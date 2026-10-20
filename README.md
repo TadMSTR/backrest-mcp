@@ -9,7 +9,7 @@ Python/FastMCP rewrite of `backrest-mcp-server`. Covers the full useful surface 
 | Tool | Description | Requires |
 |------|-------------|---------|
 | `get_health` | Check reachability + credential health (poll-safe) | — |
-| `get_config` | Read Backrest configuration (repos, plans) | — |
+| `get_config` | Read a secret-free projection of the Backrest configuration (repos, plans) | — |
 | `list_snapshots` | List snapshots; no args → all repos merged | — |
 | `list_snapshot_files` | Browse files within a snapshot (by `repo_id`) | — |
 | `get_summary` | 30-day dashboard stats per repo and plan | — |
