@@ -23,23 +23,28 @@ import sys
 import pytest
 
 LIVE = os.environ.get("BACKREST_LIVE_TEST") == "1"
-pytestmark = pytest.mark.skipif(not LIVE, reason="set BACKREST_LIVE_TEST=1 to run live conformance tests")
+pytestmark = pytest.mark.skipif(
+    not LIVE, reason="set BACKREST_LIVE_TEST=1 to run live conformance tests"
+)
 
 
 @pytest.fixture
 def mcp_server():
     from backrest_mcp.client import get_client
+
     get_client.cache_clear()
     for mod in ["backrest_mcp.server", "backrest_mcp.safety"]:
         if mod in sys.modules:
             del sys.modules[mod]
     import backrest_mcp.server as srv
+
     yield srv.mcp
     get_client.cache_clear()
 
 
 def _payload(result):
     import json
+
     return json.loads(result.content[0].text)
 
 
@@ -88,10 +93,12 @@ async def test_live_list_snapshot_files(mcp_server):
     if not entries:
         pytest.skip("no snapshots available")
     snap = entries[0]
-    files = _payload(await mcp_server.call_tool(
-        "list_snapshot_files",
-        {"repo_id": snap["repoId"], "snapshot_id": snap["id"], "path": "/"},
-    ))
+    files = _payload(
+        await mcp_server.call_tool(
+            "list_snapshot_files",
+            {"repo_id": snap["repoId"], "snapshot_id": snap["id"], "path": "/"},
+        )
+    )
     assert "error" not in files, files
     assert "entries" in files
 
@@ -105,6 +112,7 @@ async def test_live_get_config_omits_repo_password(mcp_server):
     Run this file with ``-p no:cacheprovider --tb=line``.
     """
     import json
+
     secret = os.environ.get("BACKREST_REPO_PASSWORD", "")
     if not secret:
         pytest.skip("BACKREST_REPO_PASSWORD not set")

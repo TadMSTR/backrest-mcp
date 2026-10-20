@@ -21,7 +21,7 @@ import datetime
 import os
 import pathlib
 import time
-from typing import Literal, Optional
+from typing import Literal
 
 import httpx
 import structlog
@@ -107,13 +107,15 @@ def _tool_error(tool: str, err: Exception) -> dict:
     return {"error": "tool call failed — check server logs for details"}
 
 
-def _fmt_ms(ms: Optional[int]) -> str:
+def _fmt_ms(ms: int | None) -> str:
     if ms is None:
         return "—"
-    return datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.UTC).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
 
-def _fmt_duration(start_ms: Optional[int], end_ms: Optional[int]) -> str:
+def _fmt_duration(start_ms: int | None, end_ms: int | None) -> str:
     if start_ms is None or end_ms is None:
         return ""
     secs = (end_ms - start_ms) / 1000
@@ -151,6 +153,7 @@ async def _resolve_repo_guid(client: BackrestClient, repo_id: str) -> str:
 # Read-only tools — always registered
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 async def get_health() -> dict:
     """Check that Backrest is reachable and credentials are valid.
@@ -164,7 +167,11 @@ async def get_health() -> dict:
     t0 = time.perf_counter()
     try:
         cfg = await client.post("GetConfig", {})
-        await emit_metric("backrest_tool", {"tool": "get_health", "status": "ok"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_health", "status": "ok"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return {
             "status": "ok",
             "backrest_url": backrest_url,
@@ -175,7 +182,11 @@ async def get_health() -> dict:
     except httpx.HTTPStatusError as e:
         status = "auth_failed" if e.response.status_code in (401, 403) else "unreachable"
         log.error("get_health", status=status, http_status=e.response.status_code)
-        return {"status": status, "backrest_url": backrest_url, "http_status": e.response.status_code}
+        return {
+            "status": status,
+            "backrest_url": backrest_url,
+            "http_status": e.response.status_code,
+        }
     except Exception as e:
         log.error("get_health", status="unreachable", error=str(e))
         return {"status": "unreachable", "backrest_url": backrest_url}
@@ -204,7 +215,11 @@ async def get_config() -> dict:
     t0 = time.perf_counter()
     try:
         result = project_config(await client.post("GetConfig", {}))
-        await emit_metric("backrest_tool", {"tool": "get_config"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_config"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return result
     except Exception as e:
         return _tool_error("get_config", e)
@@ -212,8 +227,8 @@ async def get_config() -> dict:
 
 @mcp.tool()
 async def list_snapshots(
-    repo_id: Optional[str] = None,
-    plan_id: Optional[str] = None,
+    repo_id: str | None = None,
+    plan_id: str | None = None,
 ) -> dict:
     """List snapshots in a Backrest repo, optionally filtered by repo or plan.
 
@@ -254,7 +269,11 @@ async def list_snapshots(
                 s.repoId = rid
                 merged.append(s)
 
-        await emit_metric("backrest_tool", {"tool": "list_snapshots"}, {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(merged)})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "list_snapshots"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(merged)},
+        )
         return {"snapshots": [s.model_dump(exclude_none=True) for s in merged]}
     except Exception as e:
         return _tool_error("list_snapshots", e)
@@ -290,8 +309,15 @@ async def list_snapshot_files(
         body = {"repoGuid": repo_guid, "snapshotId": snapshot_id, "path": path}
         raw = await client.post("ListSnapshotFiles", body)
         parsed = ListSnapshotFilesResponse.model_validate(raw)
-        await emit_metric("backrest_tool", {"tool": "list_snapshot_files"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
-        return {"path": parsed.path, "entries": [e.model_dump(exclude_none=True) for e in parsed.entries]}
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "list_snapshot_files"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
+        return {
+            "path": parsed.path,
+            "entries": [e.model_dump(exclude_none=True) for e in parsed.entries],
+        }
     except Exception as e:
         return _tool_error("list_snapshot_files", e)
 
@@ -308,7 +334,11 @@ async def get_summary() -> dict:
     try:
         raw = await client.post("GetSummaryDashboard", {})
         parsed = SummaryDashboard.model_validate(raw)
-        await emit_metric("backrest_tool", {"tool": "get_summary"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_summary"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return parsed.model_dump(exclude_none=True)
     except Exception as e:
         return _tool_error("get_summary", e)
@@ -316,8 +346,8 @@ async def get_summary() -> dict:
 
 @mcp.tool()
 async def get_operations(
-    plan_id: Optional[str] = None,
-    repo_id: Optional[str] = None,
+    plan_id: str | None = None,
+    repo_id: str | None = None,
     limit: int = 20,
 ) -> dict:
     """List recent backup operations, optionally filtered by plan or repo.
@@ -366,7 +396,11 @@ async def get_operations(
 
         ops.sort(key=lambda o: o.unixTimeStartMs or 0, reverse=True)
         ops = ops[:limit]
-        await emit_metric("backrest_tool", {"tool": "get_operations"}, {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(ops)})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_operations"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(ops)},
+        )
 
         lines = []
         for op in ops:
@@ -409,7 +443,11 @@ async def get_logs(ref: str, max_bytes: int = 100_000) -> dict:
     t0 = time.perf_counter()
     try:
         raw = await client.post_streaming("GetLogs", {"ref": ref})
-        await emit_metric("backrest_tool", {"tool": "get_logs"}, {"duration_ms": (time.perf_counter() - t0) * 1000, "bytes": len(raw)})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_logs"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "bytes": len(raw)},
+        )
         text = raw.decode("utf-8", "replace")
         truncated = len(text) > max_bytes
         if truncated:
@@ -443,7 +481,11 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
         # SECURITY[deferred]: file_path not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         raw = await client.post("GetDownloadURL", {"opId": operation_id, "filePath": file_path})
-        await emit_metric("backrest_tool", {"tool": "get_download_url"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_download_url"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return {"url": raw.get("value"), "operation_id": operation_id, "file_path": file_path}
     except Exception as e:
         return _tool_error("get_download_url", e)
@@ -454,6 +496,7 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 if not READONLY:
+
     @mcp.tool()
     async def trigger_backup(
         plan_id: str,
@@ -477,7 +520,11 @@ if not READONLY:
         t0 = time.perf_counter()
         try:
             result = await client.post("Backup", body)
-            await emit_metric("backrest_tool", {"tool": "trigger_backup"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "trigger_backup"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("trigger_backup", e)
@@ -512,7 +559,11 @@ if not READONLY:
         t0 = time.perf_counter()
         try:
             result = await client.post("DoRepoTask", body)
-            await emit_metric("backrest_tool", {"tool": "do_repo_task"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "do_repo_task"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("do_repo_task", e)
@@ -535,7 +586,11 @@ if not READONLY:
         t0 = time.perf_counter()
         try:
             result = await client.post("Cancel", {"value": operation_id})
-            await emit_metric("backrest_tool", {"tool": "cancel_operation"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "cancel_operation"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("cancel_operation", e)
@@ -546,12 +601,13 @@ if not READONLY:
 # ---------------------------------------------------------------------------
 
 if ALLOW_DESTRUCTIVE:
+
     @mcp.tool()
     async def forget_snapshot(
         snapshot_id: str,
         repo_id: str,
         confirm: str,
-        plan_id: Optional[str] = None,
+        plan_id: str | None = None,
     ) -> dict:
         """Forget (permanently delete) a specific snapshot from a Backrest repo.
 
@@ -574,11 +630,18 @@ if ALLOW_DESTRUCTIVE:
         expected = f"FORGET:{snapshot_id}"
         if confirm != expected:
             return {
-                "content": [{"type": "text", "text": f'Confirmation required. Pass confirm="{expected}" to proceed.'}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f'Confirmation required. Pass confirm="{expected}" to proceed.',
+                    }
+                ],
                 "isError": True,
             }
 
-        audit_log("forget_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "plan_id": plan_id})
+        audit_log(
+            "forget_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "plan_id": plan_id}
+        )
         client = get_client()
         body: dict = {"repoId": repo_id, "snapshotId": snapshot_id}
         if plan_id:
@@ -586,7 +649,11 @@ if ALLOW_DESTRUCTIVE:
         t0 = time.perf_counter()
         try:
             result = await client.post("Forget", body)
-            await emit_metric("backrest_tool", {"tool": "forget_snapshot"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "forget_snapshot"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("forget_snapshot", e)
@@ -597,7 +664,7 @@ if ALLOW_DESTRUCTIVE:
         repo_id: str,
         path: str,
         target: str,
-        plan_id: Optional[str] = None,
+        plan_id: str | None = None,
     ) -> dict:
         """Restore a snapshot (or a path within it) to a target directory.
 
@@ -625,17 +692,31 @@ if ALLOW_DESTRUCTIVE:
         resolved = pathlib.Path(os.path.realpath(target))
         if not resolved.is_relative_to(allowed):
             return {
-                "content": [{"type": "text", "text": (
-                    f"Restore target must be under {RESTORE_ALLOWED_PREFIX}. "
-                    f"Restore to a staging path, verify, then move manually."
-                )}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Restore target must be under {RESTORE_ALLOWED_PREFIX}. "
+                            f"Restore to a staging path, verify, then move manually."
+                        ),
+                    }
+                ],
                 "isError": True,
             }
 
         # Send and record the resolved path, not the raw one: a symlink swapped in after
         # the prefix check above could otherwise redirect the restore (TOCTOU).
         resolved_target = str(resolved)
-        audit_log("restore_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "path": path, "target": resolved_target, "plan_id": plan_id})
+        audit_log(
+            "restore_snapshot",
+            {
+                "snapshot_id": snapshot_id,
+                "repo_id": repo_id,
+                "path": path,
+                "target": resolved_target,
+                "plan_id": plan_id,
+            },
+        )
         client = get_client()
         # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
@@ -650,7 +731,11 @@ if ALLOW_DESTRUCTIVE:
         t0 = time.perf_counter()
         try:
             result = await client.post("Restore", body)
-            await emit_metric("backrest_tool", {"tool": "restore_snapshot"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "restore_snapshot"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("restore_snapshot", e)
@@ -658,6 +743,7 @@ if ALLOW_DESTRUCTIVE:
 
 def main() -> None:
     from backrest_mcp.observability import configure_logging
+
     configure_logging()
 
     if TRANSPORT == "http":

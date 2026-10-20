@@ -9,54 +9,52 @@ version running on forge. See CHANGELOG 0.3.0 for the field-name audit.
 
 from __future__ import annotations
 
-from typing import List, Optional
-
 from pydantic import BaseModel
 
 
 class Operation(BaseModel):
-    id: Optional[str] = None
-    planId: Optional[str] = None
-    repoId: Optional[str] = None
-    repoGuid: Optional[str] = None
-    snapshotId: Optional[str] = None
-    status: Optional[str] = None
-    unixTimeStartMs: Optional[int] = None
-    unixTimeEndMs: Optional[int] = None
-    displayMessage: Optional[str] = None
+    id: str | None = None
+    planId: str | None = None
+    repoId: str | None = None
+    repoGuid: str | None = None
+    snapshotId: str | None = None
+    status: str | None = None
+    unixTimeStartMs: int | None = None
+    unixTimeEndMs: int | None = None
+    displayMessage: str | None = None
     # Reference to this operation's log stream; pass to get_logs(ref=...) to read it.
-    logref: Optional[str] = None
+    logref: str | None = None
 
 
 class OperationList(BaseModel):
-    operations: List[Operation] = []
+    operations: list[Operation] = []
 
 
 class Snapshot(BaseModel):
-    id: Optional[str] = None
-    unixTimeMs: Optional[int] = None
-    hostname: Optional[str] = None
-    paths: Optional[List[str]] = None
-    tags: Optional[List[str]] = None
+    id: str | None = None
+    unixTimeMs: int | None = None
+    hostname: str | None = None
+    paths: list[str] | None = None
+    tags: list[str] | None = None
     # Populated by list_snapshots when merging across repos (not an API field).
-    repoId: Optional[str] = None
+    repoId: str | None = None
 
 
 class SnapshotList(BaseModel):
-    snapshots: List[Snapshot] = []
+    snapshots: list[Snapshot] = []
 
 
 class LsEntry(BaseModel):
-    name: Optional[str] = None
-    type: Optional[str] = None
-    path: Optional[str] = None
-    size: Optional[int] = None
-    mtime: Optional[str] = None
+    name: str | None = None
+    type: str | None = None
+    path: str | None = None
+    size: int | None = None
+    mtime: str | None = None
 
 
 class ListSnapshotFilesResponse(BaseModel):
-    path: Optional[str] = None
-    entries: List[LsEntry] = []
+    path: str | None = None
+    entries: list[LsEntry] = []
 
 
 class Summary(BaseModel):
@@ -66,20 +64,20 @@ class Summary(BaseModel):
     Field names match Backrest v1.13.0 JSON encoding.
     """
 
-    id: Optional[str] = None
-    backupsFailed30days: Optional[int] = None
-    backupsWarningLast30days: Optional[int] = None
-    backupsSuccessLast30days: Optional[int] = None
-    bytesScannedLast30days: Optional[int] = None
-    bytesAddedLast30days: Optional[int] = None
-    totalSnapshots: Optional[int] = None
-    bytesScannedAvg: Optional[int] = None
-    bytesAddedAvg: Optional[int] = None
-    nextBackupTimeMs: Optional[int] = None
+    id: str | None = None
+    backupsFailed30days: int | None = None
+    backupsWarningLast30days: int | None = None
+    backupsSuccessLast30days: int | None = None
+    bytesScannedLast30days: int | None = None
+    bytesAddedLast30days: int | None = None
+    totalSnapshots: int | None = None
+    bytesScannedAvg: int | None = None
+    bytesAddedAvg: int | None = None
+    nextBackupTimeMs: int | None = None
 
 
 class SummaryDashboard(BaseModel):
-    repoSummaries: List[Summary] = []
-    planSummaries: List[Summary] = []
-    configPath: Optional[str] = None
-    dataPath: Optional[str] = None
+    repoSummaries: list[Summary] = []
+    planSummaries: list[Summary] = []
+    configPath: str | None = None
+    dataPath: str | None = None

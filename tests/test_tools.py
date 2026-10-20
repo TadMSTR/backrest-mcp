@@ -26,6 +26,7 @@ REPO_GUID = "1490f01ca17f16e22e704c50e5a78b5728abc57a7617f08f19a76a04ecac574e"
 @pytest.fixture(autouse=True)
 def reset_client_cache():
     from backrest_mcp.client import get_client
+
     get_client.cache_clear()
     yield
     get_client.cache_clear()
@@ -47,6 +48,7 @@ def mcp_server(mock_env):
         if mod in sys.modules:
             del sys.modules[mod]
     import backrest_mcp.server as srv
+
     return srv.mcp
 
 
@@ -66,8 +68,11 @@ def _config_with_secrets():
     """
     hook_actions = {
         "actionCommand": {"command": "curl -H 'X-Token: LEAKCANARY-cmd' https://h/"},
-        "actionWebhook": {"webhookUrl": "https://h/hook/LEAKCANARY-webhook", "method": "POST",
-                          "template": "LEAKCANARY-tpl"},
+        "actionWebhook": {
+            "webhookUrl": "https://h/hook/LEAKCANARY-webhook",
+            "method": "POST",
+            "template": "LEAKCANARY-tpl",
+        },
         "actionDiscord": {"webhookUrl": "https://discord.com/api/webhooks/LEAKCANARY-discord"},
         "actionGotify": {"baseUrl": "https://gotify/", "token": "LEAKCANARY-gotify"},
         "actionSlack": {"webhookUrl": "https://hooks.slack.com/LEAKCANARY-slack"},
@@ -79,39 +84,45 @@ def _config_with_secrets():
         "modno": 42,
         "version": 6,
         "instance": "forge",
-        "repos": [{
-            "id": REPO_ID,
-            "guid": REPO_GUID,
-            "uri": "rest:https://u:LEAKCANARY-uri@host/repo",
-            "password": "LEAKCANARY-repo-password",
-            "env": [
-                "AWS_ACCESS_KEY_ID=LEAKCANARY-akid",
-                "AWS_SECRET_ACCESS_KEY=LEAKCANARY-aws",
-                "B2_ACCOUNT_KEY=LEAKCANARY-b2",
-            ],
-            "flags": ["--password-command=echo LEAKCANARY-flag", "-o", "s3.key=LEAKCANARY-o"],
-            "prunePolicy": {"schedule": {"cron": "0 3 * * 0"}, "maxUnusedPercent": 10},
-            "checkPolicy": {"schedule": {"maxFrequencyDays": 30}, "structureOnly": True},
-            "autoUnlock": True,
-            "hooks": [
-                {"conditions": ["CONDITION_ANY_ERROR"], "onError": "ON_ERROR_IGNORE", k: v}
-                for k, v in hook_actions.items()
-            ],
-            "futureSecretField": "LEAKCANARY-future",
-        }],
-        "plans": [{
-            "id": "forge-system",
-            "repo": REPO_ID,
-            "paths": ["/home/ted/Documents", "/etc"],
-            "excludes": ["*.tmp"],
-            "schedule": {"cron": "0 2 * * *", "clock": "CLOCK_LOCAL"},
-            "retention": {"policyTimeBucketed": {"daily": 7, "weekly": 4}},
-            "backup_flags": ["--exclude-caches", "--password-file=LEAKCANARY-bflag"],
-            "hooks": [{
-                "conditions": ["CONDITION_SNAPSHOT_SUCCESS"],
-                "actionHealthchecks": {"webhookUrl": "https://hc/ping/LEAKCANARY-plan-hc"},
-            }],
-        }],
+        "repos": [
+            {
+                "id": REPO_ID,
+                "guid": REPO_GUID,
+                "uri": "rest:https://u:LEAKCANARY-uri@host/repo",
+                "password": "LEAKCANARY-repo-password",
+                "env": [
+                    "AWS_ACCESS_KEY_ID=LEAKCANARY-akid",
+                    "AWS_SECRET_ACCESS_KEY=LEAKCANARY-aws",
+                    "B2_ACCOUNT_KEY=LEAKCANARY-b2",
+                ],
+                "flags": ["--password-command=echo LEAKCANARY-flag", "-o", "s3.key=LEAKCANARY-o"],
+                "prunePolicy": {"schedule": {"cron": "0 3 * * 0"}, "maxUnusedPercent": 10},
+                "checkPolicy": {"schedule": {"maxFrequencyDays": 30}, "structureOnly": True},
+                "autoUnlock": True,
+                "hooks": [
+                    {"conditions": ["CONDITION_ANY_ERROR"], "onError": "ON_ERROR_IGNORE", k: v}
+                    for k, v in hook_actions.items()
+                ],
+                "futureSecretField": "LEAKCANARY-future",
+            }
+        ],
+        "plans": [
+            {
+                "id": "forge-system",
+                "repo": REPO_ID,
+                "paths": ["/home/ted/Documents", "/etc"],
+                "excludes": ["*.tmp"],
+                "schedule": {"cron": "0 2 * * *", "clock": "CLOCK_LOCAL"},
+                "retention": {"policyTimeBucketed": {"daily": 7, "weekly": 4}},
+                "backup_flags": ["--exclude-caches", "--password-file=LEAKCANARY-bflag"],
+                "hooks": [
+                    {
+                        "conditions": ["CONDITION_SNAPSHOT_SUCCESS"],
+                        "actionHealthchecks": {"webhookUrl": "https://hc/ping/LEAKCANARY-plan-hc"},
+                    }
+                ],
+            }
+        ],
         "auth": {
             "disabled": False,
             "users": [{"name": "ted", "passwordBcrypt": "LEAKCANARY-bcrypt"}],
@@ -138,6 +149,7 @@ def _connect_stream(chunks):
 # ---------------------------------------------------------------------------
 # get_health
 # ---------------------------------------------------------------------------
+
 
 async def test_get_health_ok(mcp_server):
     with respx.mock() as mock:
@@ -173,6 +185,7 @@ async def test_get_health_unreachable(mcp_server):
 # get_config — allowlist projection (#1176)
 # ---------------------------------------------------------------------------
 
+
 async def _get_config(mcp_server, cfg):
     with respx.mock() as mock:
         mock.post(f"{BASE_URL}/v1.Backrest/GetConfig").mock(
@@ -202,11 +215,19 @@ async def test_get_config_keeps_useful_fields(mcp_server):
     assert repo["flagCount"] == 3
     assert repo["prunePolicy"]["maxUnusedPercent"] == 10
     assert [h["action"] for h in repo["hooks"]] == [
-        "actionCommand", "actionWebhook", "actionDiscord", "actionGotify",
-        "actionSlack", "actionShoutrrr", "actionHealthchecks", "actionTelegram",
+        "actionCommand",
+        "actionWebhook",
+        "actionDiscord",
+        "actionGotify",
+        "actionSlack",
+        "actionShoutrrr",
+        "actionHealthchecks",
+        "actionTelegram",
     ]
     assert repo["hooks"][0] == {
-        "conditions": ["CONDITION_ANY_ERROR"], "onError": "ON_ERROR_IGNORE", "action": "actionCommand",
+        "conditions": ["CONDITION_ANY_ERROR"],
+        "onError": "ON_ERROR_IGNORE",
+        "action": "actionCommand",
     }
     plan = data["plans"][0]
     assert plan["paths"] == ["/home/ted/Documents", "/etc"]
@@ -241,6 +262,7 @@ async def test_get_config_backend_error_is_generic(mcp_server):
 # get_summary — real field names
 # ---------------------------------------------------------------------------
 
+
 async def test_get_summary_returns_failed_and_warning_counts(mcp_server):
     """get_summary surfaces backupsFailed30days / warning counts (bug #4 fix)."""
     summary_response = {
@@ -272,6 +294,7 @@ async def test_get_summary_returns_failed_and_warning_counts(mcp_server):
 # ---------------------------------------------------------------------------
 # get_operations — selector resolution + logref surfacing
 # ---------------------------------------------------------------------------
+
 
 async def test_get_operations_no_filter_enumerates_repos(mcp_server):
     """No filter → enumerate repos and query GetOperations per repo GUID."""
@@ -327,6 +350,7 @@ async def test_get_operations_repo_filter_resolves_guid(mcp_server):
 # list_snapshots — no-arg enumeration (#223)
 # ---------------------------------------------------------------------------
 
+
 async def test_list_snapshots_no_arg_enumerates_and_tags_repo(mcp_server):
     """list_snapshots() with no args enumerates repos and tags each snapshot (#223)."""
     with respx.mock() as mock:
@@ -347,6 +371,7 @@ async def test_list_snapshots_no_arg_enumerates_and_tags_repo(mcp_server):
 # list_snapshot_files — repo_id → guid resolution (v1.13.0 uses repoGuid)
 # ---------------------------------------------------------------------------
 
+
 async def test_list_snapshot_files_sends_repo_guid(mcp_server):
     """list_snapshot_files resolves repo_id and sends repoGuid to the API."""
     with respx.mock() as mock:
@@ -354,9 +379,13 @@ async def test_list_snapshot_files_sends_repo_guid(mcp_server):
             return_value=httpx.Response(200, json=_config_response())
         )
         lsf_route = mock.post(f"{BASE_URL}/v1.Backrest/ListSnapshotFiles").mock(
-            return_value=httpx.Response(200, json={"path": "/", "entries": [{"name": "home", "type": "dir"}]})
+            return_value=httpx.Response(
+                200, json={"path": "/", "entries": [{"name": "home", "type": "dir"}]}
+            )
         )
-        result = await mcp_server.call_tool("list_snapshot_files", {"repo_id": REPO_ID, "snapshot_id": "snap1"})
+        result = await mcp_server.call_tool(
+            "list_snapshot_files", {"repo_id": REPO_ID, "snapshot_id": "snap1"}
+        )
 
     body = json.loads(lsf_route.calls[0].request.content)
     assert body["repoGuid"] == REPO_GUID
@@ -373,7 +402,9 @@ async def test_list_snapshot_files_unknown_repo_errors(mcp_server):
         lsf_route = mock.post(f"{BASE_URL}/v1.Backrest/ListSnapshotFiles").mock(
             return_value=httpx.Response(200, json={})
         )
-        result = await mcp_server.call_tool("list_snapshot_files", {"repo_id": "nope", "snapshot_id": "snap1"})
+        result = await mcp_server.call_tool(
+            "list_snapshot_files", {"repo_id": "nope", "snapshot_id": "snap1"}
+        )
 
     assert lsf_route.call_count == 0
     assert "error" in result.content[0].text
@@ -382,6 +413,7 @@ async def test_list_snapshot_files_unknown_repo_errors(mcp_server):
 # ---------------------------------------------------------------------------
 # get_logs — Connect server-streaming
 # ---------------------------------------------------------------------------
+
 
 async def test_get_logs_decodes_stream(mcp_server):
     """get_logs decodes Connect BytesValue frames into text."""
@@ -411,12 +443,15 @@ async def test_get_logs_rejects_bad_ref(mcp_server):
 # get_download_url
 # ---------------------------------------------------------------------------
 
+
 async def test_get_download_url_returns_url(mcp_server):
     with respx.mock() as mock:
         route = mock.post(f"{BASE_URL}/v1.Backrest/GetDownloadURL").mock(
             return_value=httpx.Response(200, json={"value": "http://localhost:9898/download/abc"})
         )
-        result = await mcp_server.call_tool("get_download_url", {"operation_id": "396", "file_path": "/home/ted/x"})
+        result = await mcp_server.call_tool(
+            "get_download_url", {"operation_id": "396", "file_path": "/home/ted/x"}
+        )
 
     body = json.loads(route.calls[0].request.content)
     assert body["opId"] == "396"
@@ -427,6 +462,7 @@ async def test_get_download_url_returns_url(mcp_server):
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 async def test_trigger_backup_absent_in_readonly(mcp_server):
     """trigger_backup is not registered when BACKREST_READONLY=true."""
@@ -440,7 +476,13 @@ async def test_readonly_tools_always_present(mcp_server):
     tools = await mcp_server.list_tools()
     names = [t.name for t in tools]
     for expected in [
-        "get_health", "get_config", "list_snapshots", "list_snapshot_files",
-        "get_summary", "get_operations", "get_logs", "get_download_url",
+        "get_health",
+        "get_config",
+        "list_snapshots",
+        "list_snapshot_files",
+        "get_summary",
+        "get_operations",
+        "get_logs",
+        "get_download_url",
     ]:
         assert expected in names, f"{expected} missing from tool list"

@@ -32,12 +32,14 @@ def _reload_server(monkeypatch, readonly="true", destructive="false", restore_pr
         if mod in sys.modules:
             del sys.modules[mod]
     import backrest_mcp.server as srv
+
     return srv.mcp
 
 
 @pytest.fixture(autouse=True)
 def reset_client_cache():
     from backrest_mcp.client import get_client
+
     get_client.cache_clear()
     yield
     get_client.cache_clear()
@@ -46,6 +48,7 @@ def reset_client_cache():
 # ---------------------------------------------------------------------------
 # Tool registration gating
 # ---------------------------------------------------------------------------
+
 
 async def test_readonly_true_no_write_tools(monkeypatch):
     """BACKREST_READONLY=true → write tools absent."""
@@ -84,6 +87,7 @@ async def test_allow_destructive_true_all_tools_present(monkeypatch):
 # forget_snapshot confirmation token
 # ---------------------------------------------------------------------------
 
+
 async def test_forget_wrong_confirm_returns_error(monkeypatch):
     """forget_snapshot with wrong confirm token → isError, no API call made."""
     mcp = _reload_server(monkeypatch, readonly="false", destructive="true")
@@ -91,11 +95,14 @@ async def test_forget_wrong_confirm_returns_error(monkeypatch):
         forget_route = mock.post(f"{BASE_URL}/v1.Backrest/Forget").mock(
             return_value=httpx.Response(200, json={})
         )
-        result = await mcp.call_tool("forget_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "confirm": "WRONG",
-        })
+        result = await mcp.call_tool(
+            "forget_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "confirm": "WRONG",
+            },
+        )
         assert forget_route.call_count == 0
     text = result.content[0].text
     assert "FORGET:abc123" in text
@@ -108,11 +115,14 @@ async def test_forget_correct_confirm_calls_api(monkeypatch):
         forget_route = mock.post(f"{BASE_URL}/v1.Backrest/Forget").mock(
             return_value=httpx.Response(200, json={"ok": True})
         )
-        await mcp.call_tool("forget_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "confirm": "FORGET:abc123",
-        })
+        await mcp.call_tool(
+            "forget_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "confirm": "FORGET:abc123",
+            },
+        )
         assert forget_route.call_count == 1
 
 
@@ -120,17 +130,23 @@ async def test_forget_correct_confirm_calls_api(monkeypatch):
 # restore_snapshot path guard
 # ---------------------------------------------------------------------------
 
+
 async def test_restore_outside_prefix_rejected(monkeypatch, tmp_path):
     """restore_snapshot with target outside allowed prefix → isError."""
     restore_prefix = str(tmp_path / "restore")
-    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=restore_prefix)
+    mcp = _reload_server(
+        monkeypatch, readonly="false", destructive="true", restore_prefix=restore_prefix
+    )
     with respx.mock():
-        result = await mcp.call_tool("restore_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "path": "/home/ted",
-            "target": "/etc/passwd",
-        })
+        result = await mcp.call_tool(
+            "restore_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "path": "/home/ted",
+                "target": "/etc/passwd",
+            },
+        )
     text = result.content[0].text
     assert "must be under" in text
 
@@ -139,15 +155,20 @@ async def test_restore_path_traversal_rejected(monkeypatch, tmp_path):
     """restore_snapshot with path traversal attempt → isError (realpath check)."""
     restore_prefix = tmp_path / "restore"
     restore_prefix.mkdir()
-    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix))
+    mcp = _reload_server(
+        monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
+    )
     traversal_target = str(restore_prefix / "../../etc")
     with respx.mock():
-        result = await mcp.call_tool("restore_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "path": "/",
-            "target": traversal_target,
-        })
+        result = await mcp.call_tool(
+            "restore_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "path": "/",
+                "target": traversal_target,
+            },
+        )
     text = result.content[0].text
     assert "must be under" in text
 
@@ -158,14 +179,19 @@ async def test_restore_sibling_prefix_rejected(monkeypatch, tmp_path):
     restore_prefix.mkdir()
     sibling = tmp_path / "restore-evil"
     sibling.mkdir()
-    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix))
+    mcp = _reload_server(
+        monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
+    )
     with respx.mock():
-        result = await mcp.call_tool("restore_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "path": "/",
-            "target": str(sibling / "data"),
-        })
+        result = await mcp.call_tool(
+            "restore_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "path": "/",
+                "target": str(sibling / "data"),
+            },
+        )
     text = result.content[0].text
     assert "must be under" in text
 
@@ -174,17 +200,22 @@ async def test_restore_valid_target_calls_api(monkeypatch, tmp_path):
     """restore_snapshot with valid target inside prefix → API call made."""
     restore_prefix = tmp_path / "restore"
     restore_prefix.mkdir()
-    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix))
+    mcp = _reload_server(
+        monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
+    )
     with respx.mock() as mock:
         restore_route = mock.post(f"{BASE_URL}/v1.Backrest/Restore").mock(
             return_value=httpx.Response(200, json={"operationId": "op-restore-1"})
         )
-        await mcp.call_tool("restore_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "path": "/home/ted/docs",
-            "target": str(restore_prefix / "docs"),
-        })
+        await mcp.call_tool(
+            "restore_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "path": "/home/ted/docs",
+                "target": str(restore_prefix / "docs"),
+            },
+        )
         assert restore_route.call_count == 1
 
 
@@ -201,17 +232,22 @@ async def test_restore_sends_resolved_target(monkeypatch, tmp_path):
     link.symlink_to(real_dir)
     audit = tmp_path / "audit.jsonl"
     monkeypatch.setenv("BACKREST_AUDIT_LOG", str(audit))
-    mcp = _reload_server(monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix))
+    mcp = _reload_server(
+        monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
+    )
     with respx.mock() as mock:
         route = mock.post(f"{BASE_URL}/v1.Backrest/Restore").mock(
             return_value=httpx.Response(200, json={})
         )
-        await mcp.call_tool("restore_snapshot", {
-            "snapshot_id": "abc123",
-            "repo_id": "local",
-            "path": "/home/ted/docs",
-            "target": str(link),
-        })
+        await mcp.call_tool(
+            "restore_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "path": "/home/ted/docs",
+                "target": str(link),
+            },
+        )
     expected = str(real_dir.resolve())
     assert _body(route)["target"] == expected
     entry = json.loads(audit.read_text().splitlines()[-1])
@@ -222,6 +258,7 @@ async def test_restore_sends_resolved_target(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # Write tool happy paths (BACKREST_READONLY=false)
 # ---------------------------------------------------------------------------
+
 
 async def test_trigger_backup_calls_api(monkeypatch):
     mcp = _reload_server(monkeypatch, readonly="false")
@@ -272,6 +309,7 @@ async def test_trigger_backup_invalid_plan_rejected(monkeypatch):
 # Audit log
 # ---------------------------------------------------------------------------
 
+
 async def test_audit_log_writes_entry(monkeypatch, tmp_path):
     """audit_log writes a JSONL entry when AUDIT_LOG is set."""
     audit_file = tmp_path / "audit.jsonl"
@@ -280,6 +318,7 @@ async def test_audit_log_writes_entry(monkeypatch, tmp_path):
         del sys.modules["backrest_mcp.safety"]
     monkeypatch.setenv("BACKREST_AUDIT_LOG", str(audit_file))
     import backrest_mcp.safety as safety
+
     # Patch the module-level constant to ensure it's picked up
     safety.AUDIT_LOG = str(audit_file)
     safety.audit_log("trigger_backup", {"plan_id": "daily", "dry_run": False})

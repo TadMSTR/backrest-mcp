@@ -131,6 +131,7 @@ def _get_influx():
         return None  # backend not configured — intended disabled path, stay silent
     try:
         from influxdb_client_3 import InfluxDBClient3
+
         _influx_client = InfluxDBClient3(
             host=url,
             token=os.environ.get("INFLUXDB_TOKEN", ""),
@@ -210,6 +211,7 @@ async def _get_nats():
         return None  # backend not configured — intended disabled path, stay silent
     try:
         import nats
+
         # SECURITY[deferred]: no credential support — forge NATS requires per-agent auth.
         # A NATS_URL set without creds now fails *loudly and once* (below) rather than
         # silently. NATS telemetry is not currently enabled for this server.
@@ -243,6 +245,7 @@ async def emit_metric(
     if influx:
         try:
             from influxdb_client_3 import Point
+
             p = Point(measurement)
             for k, v in tags.items():
                 p = p.tag(k, v)
@@ -275,6 +278,7 @@ async def emit_metric(
     if nats_client:
         try:
             import json
+
             prefix = os.environ.get("NATS_SUBJECT_PREFIX", "backrest")
             tool = tags.get("tool", "unknown")
             subject = f"{prefix}.tool.{tool}"

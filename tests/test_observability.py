@@ -148,6 +148,7 @@ def _fake_influx_module(*, raise_on_init=None, client=None):
 # configure_logging — one sink, and third-party loggers demoted
 # ---------------------------------------------------------------------------
 
+
 def test_configure_logging_sets_level(monkeypatch, tmp_path):
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.delenv("LOG_FILE", raising=False)
@@ -179,9 +180,9 @@ def test_configure_logging_attaches_only_the_file_handler(tmp_path, monkeypatch)
     handlers = logging.getLogger().handlers
     assert len(handlers) == 1
     assert isinstance(handlers[0], logging.FileHandler)
-    assert not any(
-        type(h) is logging.StreamHandler for h in handlers
-    ), "stderr handler must be dropped when LOG_FILE is writable"
+    assert not any(type(h) is logging.StreamHandler for h in handlers), (
+        "stderr handler must be dropped when LOG_FILE is writable"
+    )
 
 
 def test_configure_logging_falls_back_to_stderr_when_log_file_unwritable(
@@ -242,6 +243,7 @@ def test_third_party_logger_list_covers_the_measured_noise():
 # ---------------------------------------------------------------------------
 # Item 1 — InfluxDB sentinel
 # ---------------------------------------------------------------------------
+
 
 def test_get_influx_unset_env_is_silently_disabled(monkeypatch, rec_log):
     """A *missing* env var is the intended disabled path and must not warn."""
@@ -324,6 +326,7 @@ def test_get_influx_success_is_cached(monkeypatch, rec_log):
 # Item 1 — NATS sentinel
 # ---------------------------------------------------------------------------
 
+
 async def test_get_nats_unset_env_is_silently_disabled(monkeypatch, rec_log):
     monkeypatch.delenv("NATS_URL", raising=False)
 
@@ -362,6 +365,7 @@ async def test_get_nats_failure_warns_once_and_is_not_retried(monkeypatch, rec_l
 # ---------------------------------------------------------------------------
 # Item 3 — write/publish failures are warned once, not swallowed forever
 # ---------------------------------------------------------------------------
+
 
 async def test_emit_metric_write_failure_warns_once(monkeypatch, rec_log):
     """The half that must not be dropped (#580).
@@ -447,9 +451,7 @@ async def test_emit_metric_writes_a_point_and_publishes(monkeypatch, rec_log):
     monkeypatch.setattr(observability, "_nats_client", _NatsClient())
     monkeypatch.setenv("NATS_SUBJECT_PREFIX", "backrest")
 
-    await observability.emit_metric(
-        "backrest_tool", {"tool": "get_health"}, {"duration_ms": 0.5}
-    )
+    await observability.emit_metric("backrest_tool", {"tool": "get_health"}, {"duration_ms": 0.5})
 
     assert len(written) == 1
     assert published[0][0] == "backrest.tool.get_health"
@@ -460,6 +462,7 @@ async def test_emit_metric_writes_a_point_and_publishes(monkeypatch, rec_log):
 # ---------------------------------------------------------------------------
 # Item 2 — nats-py's own reconnect machinery, the larger half of the flood
 # ---------------------------------------------------------------------------
+
 
 def test_nats_connect_options_are_fail_fast():
     """The library defaults (60 attempts x 2 s, reporting each one) are what made
@@ -490,8 +493,7 @@ async def test_get_nats_passes_fail_fast_options_and_our_error_cb(monkeypatch, r
 
     assert seen["allow_reconnect"] is False
     assert (
-        seen["max_reconnect_attempts"]
-        == observability._NATS_CONNECT_OPTS["max_reconnect_attempts"]
+        seen["max_reconnect_attempts"] == observability._NATS_CONNECT_OPTS["max_reconnect_attempts"]
     )
     # Without our own error_cb, nats-py's default logs at ERROR on the
     # `nats.aio.client` logger — which the WARNING demotion does not silence.
@@ -522,9 +524,7 @@ async def test_get_nats_is_bounded_by_a_deadline(monkeypatch, rec_log):
 async def test_nats_error_cb_warns_once_and_leaks_nothing(rec_log):
     """This callback replaces the one that produces the per-attempt ERROR lines."""
     for _ in range(50):
-        await observability._nats_error_cb(
-            ConnectionRefusedError(f"cannot reach {SECRET_URL}")
-        )
+        await observability._nats_error_cb(ConnectionRefusedError(f"cannot reach {SECRET_URL}"))
 
     assert [e for e, _ in rec_log.warnings] == ["nats_transport_error"]
     assert rec_log.warnings[0][1]["error_class"] == "ConnectionRefusedError"
