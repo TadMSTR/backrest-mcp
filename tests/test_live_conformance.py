@@ -4,21 +4,25 @@ Live conformance tests against a running Backrest instance.
 These are SKIPPED unless BACKREST_LIVE_TEST=1, so CI stays hermetic. Run them against
 the deployed instance to catch connect-rpc field-name drift that the mock tests cannot:
 
-    BACKREST_LIVE_TEST=1 \
-    BACKREST_URL=http://localhost:9898 \
-    BACKREST_USERNAME=... BACKREST_PASSWORD=... BACKREST_REPO_PASSWORD=... \
-    pytest -q -p no:cacheprovider --tb=line tests/test_live_conformance.py
+    python scripts/run_live_conformance.py
 
-Load the credentials from a file inside the process or a wrapper, not on the command line.
-``--tb=line`` keeps traceback locals (which can hold config data) out of the output.
+The wrapper reads BACKREST_* from the file named by BACKREST_LIVE_ENV_FILE (default
+~/.secrets/forge.env) inside the process, so no credential is ever on a command line, and
+runs this file with ``-p no:cacheprovider --tb=line``. ``--tb=line`` keeps traceback locals
+(which can hold config data) out of the output.
+
+Every secret check is computed first and asserted as a bool with a fixed message: pytest's
+assertion rewriting prints both operands of a failing comparison.
 
 They mirror the "Verification / Live conformance check" section of the v0.3.0 build plan.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import warnings
 
 import pytest
 
@@ -122,3 +126,64 @@ async def test_live_get_config_omits_repo_password(mcp_server):
     del raw, secret
     assert not errored, "get_config returned an error"
     assert not leaked, "repo password present in get_config output"
+
+
+def _secret_free(raw: str) -> tuple[bool, bool]:
+    """(errored, leaked) for a tool's raw JSON text. Quoted-key matches, never bare `env`."""
+    secret = os.environ.get("BACKREST_REPO_PASSWORD", "")
+    errored = "error" in json.loads(raw)
+    leaked = (bool(secret) and secret in raw) or '"password"' in raw or '"env"' in raw
+    return errored, leaked
+
+
+async def test_live_list_plans(mcp_server):
+    raw = (await mcp_server.call_tool("list_plans", {})).content[0].text
+    errored, leaked = _secret_free(raw)
+    ok_shape = not errored and json.loads(raw).get("count", 0) >= 1
+    del raw
+    assert not errored, "list_plans returned an error"
+    assert not leaked, "list_plans output carries a password or env key"
+    assert ok_shape, "list_plans returned no plans"
+
+
+async def test_live_find_plan_for_path(mcp_server):
+    raw = (await mcp_server.call_tool("find_plan_for_path", {"path": "/home/ted"})).content[0].text
+    errored, leaked = _secret_free(raw)
+    data = {} if errored else json.loads(raw)
+    del raw
+    assert not errored, "find_plan_for_path returned an error"
+    assert not leaked, "find_plan_for_path output carries a password or env key"
+    ok_shape = data.get("match") == "approximate" and isinstance(data.get("plans"), list)
+    assert ok_shape, "find_plan_for_path response has the wrong shape"
+
+
+async def test_live_get_backup_freshness(mcp_server):
+    raw = (await mcp_server.call_tool("get_backup_freshness", {})).content[0].text
+    errored, leaked = _secret_free(raw)
+    plans = [] if errored else json.loads(raw).get("plans", [])
+    del raw
+    assert not errored, "get_backup_freshness returned an error"
+    assert not leaked, "get_backup_freshness output carries a password or env key"
+    states = {p.get("state") for p in plans}
+    ok_shape = bool(plans) and states <= {"ok", "stale", "unscheduled"}
+    assert ok_shape, "get_backup_freshness returned no plans or an unknown state"
+
+
+async def test_live_policy_messages_have_no_unknown_fields():
+    """Warn, by key name only, when Backrest's nested policy messages grow a field (F-04).
+
+    redact.py drops an unlisted field, so this is not a leak; it is the prompt to decide
+    whether the new field belongs in the allowlist. Values are never printed.
+    """
+    from backrest_mcp.client import get_client
+    from backrest_mcp.redact import unknown_policy_keys
+
+    get_client.cache_clear()
+    unknown = unknown_policy_keys(await get_client().post("GetConfig", {}))
+    get_client.cache_clear()
+    if unknown:
+        warnings.warn(
+            "Backrest config has policy fields redact.py does not list (dropped): "
+            + ", ".join(sorted(set(unknown))),
+            stacklevel=1,
+        )

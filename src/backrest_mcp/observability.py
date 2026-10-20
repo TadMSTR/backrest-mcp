@@ -200,6 +200,32 @@ async def _nats_error_cb(exc: Exception) -> None:
         )
 
 
+def _nats_auth_kwargs() -> dict[str, str]:
+    """Credentials for nats.connect() from the environment (#4).
+
+    Forge NATS requires per-agent auth. In order of preference:
+      NATS_CREDS_FILE               a .creds file (JWT + nkey) -> user_credentials
+      NATS_USER and NATS_PASSWORD   username/password
+    Userinfo in NATS_URL (nats://user:pass@host) also works; nats-py reads it itself.
+    Only one of NATS_USER/NATS_PASSWORD set is a misconfiguration: warn (names only) and
+    connect without, so the server's refusal is reported through nats_init_failed.
+    """
+    creds_file = os.environ.get("NATS_CREDS_FILE", "")
+    if creds_file:
+        return {"user_credentials": creds_file}
+    user = os.environ.get("NATS_USER", "")
+    password = os.environ.get("NATS_PASSWORD", "")
+    if user and password:
+        return {"user": user, "password": password}
+    if user or password:
+        log.warning(
+            "nats_auth_incomplete",
+            detail="set both NATS_USER and NATS_PASSWORD, or NATS_CREDS_FILE",
+            missing="NATS_PASSWORD" if user else "NATS_USER",
+        )
+    return {}
+
+
 async def _get_nats():
     global _nats_client, _nats_failed
     if _nats_client is not None:
@@ -212,13 +238,10 @@ async def _get_nats():
     try:
         import nats
 
-        # SECURITY[deferred]: no credential support — forge NATS requires per-agent auth.
-        # A NATS_URL set without creds now fails *loudly and once* (below) rather than
-        # silently. NATS telemetry is not currently enabled for this server.
-        # Target: when NATS telemetry is enabled for this server.
-        # Audit: 2026-06-04/backrest-mcp-2026-06. Ticket: BKRST-1.
+        # A failed connect (bad URL, wrong or missing credentials) fails loudly and once
+        # below rather than on every metric.
         _nats_client = await asyncio.wait_for(
-            nats.connect(url, error_cb=_nats_error_cb, **_NATS_CONNECT_OPTS),
+            nats.connect(url, error_cb=_nats_error_cb, **_NATS_CONNECT_OPTS, **_nats_auth_kwargs()),
             timeout=_NATS_CONNECT_DEADLINE,
         )
     except Exception as exc:

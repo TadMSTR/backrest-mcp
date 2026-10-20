@@ -557,3 +557,57 @@ def test_no_log_site_renders_an_exception_traceback():
     src = pathlib.Path(observability.__file__).read_text()
     offenders = [ln.strip() for ln in src.splitlines() if "exc_info=True" in ln]
     assert offenders == [], offenders
+
+
+# ---------------------------------------------------------------------------
+# #4 — NATS credentials from the environment
+# ---------------------------------------------------------------------------
+
+
+async def _connect_kwargs(monkeypatch, env):
+    seen = {}
+
+    async def _connect(url, **kwargs):
+        seen.update(kwargs)
+        raise OSError("refused")
+
+    mod = types.ModuleType("nats")
+    mod.connect = _connect
+    monkeypatch.setitem(sys.modules, "nats", mod)
+    monkeypatch.setenv("NATS_URL", "nats://nats.internal:4222")
+    for key in ("NATS_CREDS_FILE", "NATS_USER", "NATS_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    await observability._get_nats()
+    return {k: v for k, v in seen.items() if k in ("user", "password", "user_credentials")}
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, {}),
+        (
+            {"NATS_USER": "agent-backrest", "NATS_PASSWORD": "pw"},
+            {"user": "agent-backrest", "password": "pw"},
+        ),
+        ({"NATS_CREDS_FILE": "/x/backrest.creds"}, {"user_credentials": "/x/backrest.creds"}),
+        (
+            {"NATS_CREDS_FILE": "/x/backrest.creds", "NATS_USER": "u", "NATS_PASSWORD": "p"},
+            {"user_credentials": "/x/backrest.creds"},
+        ),
+    ],
+)
+async def test_get_nats_passes_credentials(monkeypatch, rec_log, env, expected):
+    assert await _connect_kwargs(monkeypatch, env) == expected
+
+
+@pytest.mark.parametrize(
+    ("env", "missing"),
+    [({"NATS_USER": "u"}, "NATS_PASSWORD"), ({"NATS_PASSWORD": "sup3rs3cr3t-pw"}, "NATS_USER")],
+)
+async def test_get_nats_half_credentials_warn_without_values(monkeypatch, rec_log, env, missing):
+    assert await _connect_kwargs(monkeypatch, env) == {}
+    events = dict(rec_log.warnings)
+    assert events["nats_auth_incomplete"]["missing"] == missing
+    assert "sup3rs3cr3t" not in repr(rec_log.warnings)

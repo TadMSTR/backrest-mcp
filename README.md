@@ -176,6 +176,8 @@ Optional NATS publishing via `pip install -e ".[nats]"`:
 |---------|---------|
 | `NATS_URL` | NATS server URL. Unset = disabled. |
 | `NATS_SUBJECT_PREFIX` | Subject prefix (default: `backrest`); subjects are `<prefix>.tool.<tool>` |
+| `NATS_CREDS_FILE` | `.creds` file (JWT + nkey). Takes precedence over user/password. |
+| `NATS_USER` / `NATS_PASSWORD` | Per-agent username and password. Set both, or neither. |
 
 Each tool call emits a `backrest_tool` measurement with `tool` tag and `duration_ms` field.
 
