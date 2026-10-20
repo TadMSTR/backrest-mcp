@@ -1,0 +1,15 @@
+# CODEOWNERS — F2. Single maintainer, so one owner. Required under `visibility: public`:
+# OSSF Scorecard reads it, and it answers "who is accountable for a change here".
+#
+# GitHub applies the LAST matching pattern, so the lines below override the catch-all
+# and stay owned even if the catch-all is ever narrowed.
+
+*                                @TadMSTR
+
+# The secret boundary: the allowlist projection of Backrest's config (#1176) and the
+# write/restore gates.
+/src/backrest_mcp/redact.py      @TadMSTR
+/src/backrest_mcp/safety.py      @TadMSTR
+
+# Workflows hold the credentials.
+/.github/                        @TadMSTR

@@ -105,6 +105,7 @@ async def test_no_auth_when_no_credentials():
 # Connect server-streaming (GetLogs)
 # ---------------------------------------------------------------------------
 
+
 async def test_post_streaming_decodes_and_concatenates():
     """Streaming RPC decodes base64 BytesValue frames and concatenates payloads."""
     stream = _bytesvalue_frame("hello ") + _bytesvalue_frame("world") + _frame(b"{}", end=True)

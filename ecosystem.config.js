@@ -48,7 +48,9 @@ const env = {
   // Safety controls — restrictive defaults, override explicitly to enable writes
   BACKREST_READONLY: "true",
   BACKREST_ALLOW_DESTRUCTIVE: "false",
-  BACKREST_RESTORE_ALLOWED_PREFIX: "/tmp/backrest-restore/",
+  // Under ted's home, not /tmp (#1182). Must exist as a 0700 directory owned by ted;
+  // restore_snapshot refuses a missing, symlinked, foreign-owned or non-0700 one.
+  BACKREST_RESTORE_ALLOWED_PREFIX: path.join(HOME, "backrest-restore") + "/",
   BACKREST_AUDIT_LOG: "/home/ted/logs/backrest-mcp-audit.jsonl",
   LOG_LEVEL: "INFO",
   LOG_FILE: "/home/ted/logs/backrest-mcp.log",

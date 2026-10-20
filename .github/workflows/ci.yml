@@ -4,9 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+
+# Least privilege at the top level (F6). GitHub's default token is WRITE, and nothing goes
+# red when a workflow runs with more than it needs. No job below escalates.
+permissions:
+  contents: read
 
 jobs:
   test:
+    name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -14,20 +21,142 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        id: py
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]" ruff
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # The action is SHA-pinned, but without this it fetches the latest uv, so
+          # `uv lock --check`, the pylock export the audit reads, and `uv build` could change
+          # between runs (audit p2 F-06). Dependabot does not bump this input: move it by
+          # hand, in all three jobs, alongside a `uv lock` refresh.
+          version: "0.13.4"
+
+      # FROM THE LOCK. `--frozen` installs exactly uv.lock and fails rather than re-resolve,
+      # so a green run is evidence about the set this project pins. The ranges in
+      # pyproject.toml are checked by the audit job's `uv lock --check`.
+      - name: Install dependencies (locked)
+        env:
+          UV_PYTHON: ${{ steps.py.outputs.python-path }}
+        run: uv sync --frozen --extra dev
 
       - name: Lint (ruff)
-        run: ruff check backrest_mcp tests
+        run: uv run --frozen --no-sync ruff check .
 
-      - name: Test (pytest + coverage)
-        run: pytest -q --cov=backrest_mcp --cov-report=term-missing
+      - name: Format check (ruff)
+        run: uv run --frozen --no-sync ruff format --check .
+
+      # The floor is in pyproject.toml with its measured number and date (F8). The live
+      # file skips here (no Backrest); scripts/run_live_conformance.py runs it on forge.
+      - name: Test
+        run: uv run --frozen --no-sync pytest --cov=backrest_mcp --cov-report=term-missing
+
+  # DEPENDENCY AUDIT, against the lock.
+  #
+  # `pip-audit .` re-resolves the declared ranges and reports on what a fresh install would
+  # get today, not on what this project pins (vikunja#633).
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # The action is SHA-pinned, but without this it fetches the latest uv, so
+          # `uv lock --check`, the pylock export the audit reads, and `uv build` could change
+          # between runs (audit p2 F-06). Dependabot does not bump this input: move it by
+          # hand, in all three jobs, alongside a `uv lock` refresh.
+          version: "0.13.4"
+
+      # A committed lock nobody checks is a stale file that looks like a pin. This fails
+      # when pyproject.toml changed and uv.lock did not.
+      - name: Lockfile is in sync with pyproject.toml
+        run: uv lock --check
+
+      # Two gates: a runtime advisory affects the deployed server, a dev advisory only CI.
+      # The influxdb/otel/nats extras are on the runtime side: off by default, but they are
+      # what the process loads when enabled.
+      # --no-emit-project: --strict trips on the project's own versionless entry.
+      - name: Export runtime dependency set
+        run: |
+          uv export --frozen --no-emit-project \
+            --all-extras --no-extra dev \
+            --format pylock.toml -o pylock.runtime.toml
+
+      - name: Export dev dependency set
+        run: |
+          uv export --frozen --no-emit-project \
+            --extra dev \
+            --format pylock.toml -o pylock.dev.toml
+
+      # Each in its own directory, so `pip-audit --locked` cannot merge the two and lose
+      # which side a finding is on. pip-audit itself is pinned.
+      # No --ignore-vuln without a dated, ticket-referenced reason next to it.
+      - name: Audit runtime dependencies
+        run: |
+          mkdir -p .audit-runtime && cp pylock.runtime.toml .audit-runtime/pylock.toml
+          uv tool run --from "pip-audit==2.10.1" pip-audit --strict --locked .audit-runtime
+
+      - name: Audit dev dependencies
+        run: |
+          mkdir -p .audit-dev && cp pylock.dev.toml .audit-dev/pylock.toml
+          uv tool run --from "pip-audit==2.10.1" pip-audit --strict --locked .audit-dev
+
+  # The src/ move needs `where = ["src"]`; without it the wheel builds empty and nothing
+  # else notices until someone installs it.
+  build:
+    name: Build and import the wheel
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          # The action is SHA-pinned, but without this it fetches the latest uv, so
+          # `uv lock --check`, the pylock export the audit reads, and `uv build` could change
+          # between runs (audit p2 F-06). Dependabot does not bump this input: move it by
+          # hand, in all three jobs, alongside a `uv lock` refresh.
+          version: "0.13.4"
+
+      - name: Build and import from outside the tree
+        run: |
+          uv build --wheel
+          cd /tmp
+          uv venv -q wheel-check
+          uv pip install -q -p wheel-check "$GITHUB_WORKSPACE"/dist/*.whl
+          wheel-check/bin/python -c "import backrest_mcp.server, backrest_mcp.redact; print('import ok')"
+          test -x wheel-check/bin/backrest-mcp
+
+  # codeql-action's init/analyze/upload-sarif must move as one; Dependabot's group stops it
+  # splitting them, this stops a hand edit doing it. Proves it can fail before passing.
+  workflow-pins:
+    name: Action pins are consistent
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check action pins
+        run: python3 tests/check_action_pins.py

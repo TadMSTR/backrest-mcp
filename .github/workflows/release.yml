@@ -5,8 +5,9 @@ on:
     tags:
       - "v*"
 
+# Read at the top; write only on the job that creates the release (F6).
 permissions:
-  contents: write # Required for gh release create
+  contents: read
 
 # Source-only release (no PyPI) — same pattern as matrix-dispatcher/agent-bus/dockhand-mcp/githost-mcp.
 # A tag `vX.Y.Z` cuts a GitHub Release with auto-generated notes.
@@ -14,9 +15,11 @@ jobs:
   create-github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # gh release create
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 

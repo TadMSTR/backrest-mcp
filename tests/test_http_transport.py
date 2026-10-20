@@ -23,12 +23,14 @@ def _reload_server(monkeypatch, **env):
         if mod in sys.modules:
             del sys.modules[mod]
     import backrest_mcp.server as srv
+
     return srv
 
 
 @pytest.fixture(autouse=True)
 def reset_client_cache():
     from backrest_mcp.client import get_client
+
     get_client.cache_clear()
     yield
     get_client.cache_clear()
@@ -52,7 +54,9 @@ def test_http_without_token_refuses(monkeypatch):
 
 
 def test_http_short_token_refuses(monkeypatch):
-    srv = _reload_server(monkeypatch, BACKREST_MCP_TRANSPORT="http", BACKREST_MCP_AUTH_TOKEN="short")
+    srv = _reload_server(
+        monkeypatch, BACKREST_MCP_TRANSPORT="http", BACKREST_MCP_AUTH_TOKEN="short"
+    )
     with pytest.raises(RuntimeError, match="too short"):
         srv.main()
 

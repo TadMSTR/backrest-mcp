@@ -15,6 +15,9 @@ browsing snapshot contents, triggering backups, running repo maintenance tasks, 
 **Always registered (read-only):**
 - `get_health()` — Reachability + credential health (`ok`/`auth_failed`/`unreachable`); poll-safe
 - `get_config()` — Secret-free allowlist projection of the Backrest config (`redact.py`); never returns repo passwords, env values, flags, hook targets or the multihost block
+- `list_plans()` — Projected plans (paths, excludes, repo, schedule, retention); prefer to `get_config` for coverage questions
+- `find_plan_for_path(path)` — Plans covering an absolute path, with the first matching exclude; approximate restic matching, pure string ops
+- `get_backup_freshness(max_age_hours?)` — Per plan: last SUCCESS/WARNING backup, age, latest status, `ok`/`stale`/`unscheduled`; returns `stale_count` and `unscheduled_count` (a disabled schedule is never stale, so monitor both)
 - `list_snapshots(repo_id?, plan_id?)` — List snapshots; no args → enumerate all repos, tag each
 - `list_snapshot_files(repo_id, snapshot_id, path?)` — Browse files (repo_id resolved to GUID internally)
 - `get_summary()` — 30-day dashboard stats per repo and plan
@@ -37,10 +40,12 @@ restic execution), `SetConfig`, `AddRepo`, `RemoveRepo` (deletes history), `Clea
 ## Structure
 
 ```
-backrest_mcp/
+src/backrest_mcp/
   __init__.py
   client.py        BackrestClient — connect-rpc: unary POST+JSON, plus post_streaming() for GetLogs
   models.py        Pydantic models for API responses (camelCase field names, v1.13.0)
+  plans.py         Pure path-coverage and freshness-threshold helpers for the plan tools
+  redact.py        Allowlist projection of GetConfig: the only way config reaches a caller
   safety.py        Safety controls — READONLY flag, ALLOW_DESTRUCTIVE gate, path guard, audit log
   server.py        FastMCP server — conditional tool registration, transport select + fail-closed guard
   observability.py structlog JSON logging + optional InfluxDB/NATS metrics
@@ -50,8 +55,17 @@ tests/
   test_safety.py           Safety gating, confirm tokens, path guards, write-tool happy paths
   test_http_transport.py   HTTP transport fail-closed guards (loopback + bearer token)
   test_observability.py    Logging config + no-op metric smoke tests
+  test_redact.py           Projection helpers, incl. the F-04 nested-message pins
+  test_plans.py            Path matching and freshness thresholds (table-driven)
+  test_live_runner.py      The live runner's env parsing and exit codes
+  test_workflows.py        SHA pins + top-level permissions in every workflow
+  check_gitleaks_gate.py   Two-sided secret-scan gate (CI)
+  check_action_pins.py     Two-sided action-pin consistency gate (CI)
   test_live_conformance.py Live :9898 conformance (skipped unless BACKREST_LIVE_TEST=1)
+scripts/
+  run_live_conformance.py  Live tests with the BACKREST_* credentials read in-process from BACKREST_LIVE_ENV_FILE
 pyproject.toml
+uv.lock              Locked dependency set; CI installs with uv sync --frozen
 ecosystem.config.js  PM2 config (HTTP transport, BACKREST_READONLY=true default)
 ```
 
@@ -64,7 +78,7 @@ ecosystem.config.js  PM2 config (HTTP transport, BACKREST_READONLY=true default)
 | `BACKREST_PASSWORD` | — | Basic Auth password (optional) |
 | `BACKREST_READONLY` | `true` | Disable all write tools when true |
 | `BACKREST_ALLOW_DESTRUCTIVE` | `false` | Enable forget_snapshot + restore_snapshot |
-| `BACKREST_RESTORE_ALLOWED_PREFIX` | `/tmp/backrest-restore/` | Restore target path guard |
+| `BACKREST_RESTORE_ALLOWED_PREFIX` | `~/backrest-restore/` | Restore target path guard; must be a real 0700 directory owned by the server user |
 | `BACKREST_AUDIT_LOG` | — | JSONL audit log path for write ops |
 | `BACKREST_MCP_TRANSPORT` | `stdio` | `stdio` or `http` (loopback PM2 service) |
 | `BACKREST_MCP_HTTP_HOST` | `127.0.0.1` | http bind host (non-loopback refused unless override) |
@@ -88,8 +102,10 @@ Four layered controls gate write and destructive operations:
 3. **Forget confirmation token** — `forget_snapshot` requires `confirm=f"FORGET:{snapshot_id}"`.
    Forces the caller to name the exact snapshot being deleted.
 
-4. **Restore path guard** — `restore_snapshot` validates `target` with `os.path.realpath()`
-   against `BACKREST_RESTORE_ALLOWED_PREFIX`. Path traversal attempts are blocked.
+4. **Restore path guard** — `restore_snapshot` refuses a prefix that is missing, a symlink,
+   not a directory, not owned by the server uid, or not mode 0700
+   (`check_restore_prefix`, #1182), then validates `target` with `os.path.realpath()` against
+   it. Path traversal attempts are blocked.
 
 5. **Audit log** — all write tool calls append a JSONL entry to `BACKREST_AUDIT_LOG` (if set).
    Credential values are never included.
@@ -110,17 +126,34 @@ Four layered controls gate write and destructive operations:
   `repos[].password` in cleartext. Any tool that returns config data to a caller must go
   through `redact.project_config` (or its `project_*` helpers), which builds a new dict from
   allowlisted keys. `_list_repos` reads the raw config for `guid` resolution only (#1176).
+  The nested policy messages have their own allowlists (`REPO_MESSAGES`, `PLAN_MESSAGES`),
+  pinned by a test; a new Backrest field is dropped until it is named there (F-04).
 - **lru_cache on get_client()** — single BackrestClient instance reused for the server lifetime.
 - **Opt-in write access** — safe default requires no configuration. Set env vars explicitly to unlock.
 
 ## Build
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-pytest
+uv sync --frozen --extra dev          # the locked set CI uses
+uv run --frozen --no-sync ruff check . && uv run --frozen --no-sync ruff format --check .
+uv run --frozen --no-sync pytest --cov=backrest_mcp
 ```
+
+The coverage floor is `fail_under` in `pyproject.toml`; raise it, never lower it.
+
+Live tests (forge only; credentials are read in-process, never on argv):
+
+```bash
+/home/ted/repos/personal/backrest-mcp/.venv/bin/python scripts/run_live_conformance.py
+```
+
+Exit 0 means the live file ran and passed; 3 means everything skipped, which is not a pass.
+`BACKREST_LIVE_ENV_FILE` points it at a different env file.
+
+**Deploy installs from the lock** (`UV_PROJECT_ENVIRONMENT=.venv uv sync --frozen --extra dev`),
+never `pip install -e .`: pip keeps whatever dependency versions the venv already has, so the
+CI lock audit would describe a set that is not running (audit p2 F-01). PM2 restarts are
+sysadmin's; see README "Deployment (PM2)".
 
 ## Git workflow
 

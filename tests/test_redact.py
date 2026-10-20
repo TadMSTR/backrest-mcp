@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from backrest_mcp.redact import project_config, project_hook, project_repo, strip_userinfo
+from backrest_mcp.redact import (
+    PLAN_MESSAGES,
+    REPO_MESSAGES,
+    project_config,
+    project_hook,
+    project_plan,
+    project_repo,
+    strip_userinfo,
+    unknown_policy_keys,
+)
 
 
 @pytest.mark.parametrize(
@@ -83,3 +92,105 @@ def test_projection_does_not_alias_input():
     out = project_config(cfg)
     out["plans"][0]["paths"].append("/b")
     assert cfg["plans"][0]["paths"] == ["/a"]
+
+
+# ---------------------------------------------------------------------------
+# F-04: nested policy messages are projected through pinned key allowlists
+# ---------------------------------------------------------------------------
+
+# Field JSON names from Backrest v1.13.0 proto/v1/config.proto, written out by hand so a
+# change to redact.py's allowlists has to change this table too.
+_SCHEDULE = {"disabled", "cron", "maxFrequencyDays", "maxFrequencyHours", "clock"}
+_RETENTION = {"policyKeepLastN", "policyTimeBucketed", "policyKeepAll"}
+_TIME_BUCKETED = {"hourly", "daily", "weekly", "monthly", "yearly", "keepLastN"}
+_PINNED = {
+    "prunePolicy": {"schedule", "maxUnusedBytes", "maxUnusedPercent"},
+    "checkPolicy": {"schedule", "structureOnly", "readDataSubsetPercent"},
+    "forgetPolicy": {"schedule", "retention"},
+    "commandPrefix": {"ioNice", "cpuNice"},
+    "schedule": _SCHEDULE,
+    "retention": _RETENTION,
+}
+
+
+def test_nested_message_field_names_are_pinned():
+    specs = {**REPO_MESSAGES, **PLAN_MESSAGES}
+    assert set(specs) == set(_PINNED)
+    for name, fields in _PINNED.items():
+        assert set(specs[name]) == fields, name
+    for name in ("prunePolicy", "checkPolicy", "forgetPolicy"):
+        assert set(REPO_MESSAGES[name]["schedule"]) == _SCHEDULE
+    assert set(REPO_MESSAGES["forgetPolicy"]["retention"]) == _RETENTION
+    assert set(PLAN_MESSAGES["retention"]["policyTimeBucketed"]) == _TIME_BUCKETED
+
+
+def _repo_with_unknown_subfields():
+    return {
+        "id": "r",
+        "prunePolicy": {
+            "schedule": {"cron": "0 3 * * 0", "futureSched": "LEAKCANARY-a"},
+            "maxUnusedPercent": 10,
+            "futurePrune": "LEAKCANARY-b",
+        },
+        "checkPolicy": {"readDataSubsetPercent": 5.0, "futureCheck": {"x": "LEAKCANARY-c"}},
+        "forgetPolicy": {
+            "schedule": {"maxFrequencyDays": 7},
+            "retention": {"policyTimeBucketed": {"daily": 7, "futureBucket": "LEAKCANARY-d"}},
+        },
+        "commandPrefix": {"ioNice": "IO_IDLE", "futurePrefix": "LEAKCANARY-e"},
+    }
+
+
+def test_unknown_nested_repo_fields_are_dropped():
+    out = project_repo(_repo_with_unknown_subfields())
+    assert "LEAKCANARY" not in repr(out)
+    assert out["prunePolicy"] == {"schedule": {"cron": "0 3 * * 0"}, "maxUnusedPercent": 10}
+    assert out["checkPolicy"] == {"readDataSubsetPercent": 5.0}
+    assert out["forgetPolicy"] == {
+        "schedule": {"maxFrequencyDays": 7},
+        "retention": {"policyTimeBucketed": {"daily": 7}},
+    }
+    assert out["commandPrefix"] == {"ioNice": "IO_IDLE"}
+
+
+def test_unknown_nested_plan_fields_are_dropped():
+    out = project_plan(
+        {
+            "id": "p",
+            "schedule": {"maxFrequencyHours": 6, "clock": "CLOCK_UTC", "x": "LEAKCANARY-f"},
+            "retention": {"policyKeepLastN": 30, "y": "LEAKCANARY-g"},
+        }
+    )
+    assert "LEAKCANARY" not in repr(out)
+    assert out["schedule"] == {"maxFrequencyHours": 6, "clock": "CLOCK_UTC"}
+    assert out["retention"] == {"policyKeepLastN": 30}
+
+
+def test_non_scalar_in_a_scalar_slot_is_dropped():
+    """A known name whose value turned into a message or list is not copied whole."""
+    out = project_plan(
+        {
+            "id": "p",
+            "schedule": {"cron": {"expr": "LEAKCANARY-h"}, "clock": ["LEAKCANARY-i"]},
+            "retention": "LEAKCANARY-j",
+        }
+    )
+    assert "LEAKCANARY" not in repr(out)
+    assert out["schedule"] == {}
+    assert out["retention"] == {}
+
+
+def test_unknown_policy_keys_reports_names_not_values():
+    cfg = {"repos": [_repo_with_unknown_subfields()], "plans": [{"schedule": {"z": "LEAKCANARY"}}]}
+    found = unknown_policy_keys(cfg)
+    assert sorted(found) == [
+        "plans[0].schedule.z",
+        "repos[0].checkPolicy.futureCheck",
+        "repos[0].commandPrefix.futurePrefix",
+        "repos[0].forgetPolicy.retention.policyTimeBucketed.futureBucket",
+        "repos[0].prunePolicy.futurePrune",
+        "repos[0].prunePolicy.schedule.futureSched",
+    ]
+    assert "LEAKCANARY" not in repr(found)
+    assert unknown_policy_keys(None) == []
+    assert unknown_policy_keys({"repos": [{"prunePolicy": {"maxUnusedPercent": 1}}]}) == []

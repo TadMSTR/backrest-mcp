@@ -5,8 +5,9 @@ Reconciled against the deployed Backrest v1.13.0 connect-rpc API.
 
 Tool registration is gated by safety flags from backrest_mcp.safety:
   Always registered (read-only):
-    get_health, get_config, list_snapshots, list_snapshot_files, get_summary,
-    get_operations, get_logs, get_download_url
+    get_health, get_config, list_plans, find_plan_for_path, get_backup_freshness,
+    list_snapshots, list_snapshot_files, get_summary, get_operations, get_logs,
+    get_download_url
 
   Registered when BACKREST_READONLY=false:
     trigger_backup, do_repo_task, cancel_operation
@@ -21,7 +22,7 @@ import datetime
 import os
 import pathlib
 import time
-from typing import Literal, Optional
+from typing import Literal
 
 import httpx
 import structlog
@@ -36,12 +37,14 @@ from .models import (
     SummaryDashboard,
 )
 from .observability import emit_metric
+from .plans import covering_root, excluded_by, normalise_path, stale_threshold
 from .redact import project_config
 from .safety import (
     ALLOW_DESTRUCTIVE,
     READONLY,
     RESTORE_ALLOWED_PREFIX,
     audit_log,
+    check_restore_prefix,
     validate_backrest_id,
 )
 
@@ -75,6 +78,9 @@ mcp = FastMCP(
         "(http://localhost:9898). Provides read access to backup operations, snapshots, "
         "configuration, dashboard stats, and operation logs. Start with get_health to "
         "confirm the instance is reachable and credentials are valid. "
+        "To answer 'is this path backed up?' call find_plan_for_path; to see what each plan "
+        "covers call list_plans; to check for missed or failing backups call "
+        "get_backup_freshness. Use get_config only when you need repo settings too. "
         "Write tools (trigger_backup, do_repo_task, cancel_operation) are only registered "
         "when BACKREST_READONLY=false. Destructive tools (forget_snapshot, restore_snapshot) "
         "additionally require BACKREST_ALLOW_DESTRUCTIVE=true. RunCommand/SetConfig/AddRepo/"
@@ -107,13 +113,15 @@ def _tool_error(tool: str, err: Exception) -> dict:
     return {"error": "tool call failed — check server logs for details"}
 
 
-def _fmt_ms(ms: Optional[int]) -> str:
+def _fmt_ms(ms: int | None) -> str:
     if ms is None:
         return "—"
-    return datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return datetime.datetime.fromtimestamp(ms / 1000, tz=datetime.UTC).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
 
 
-def _fmt_duration(start_ms: Optional[int], end_ms: Optional[int]) -> str:
+def _fmt_duration(start_ms: int | None, end_ms: int | None) -> str:
     if start_ms is None or end_ms is None:
         return ""
     secs = (end_ms - start_ms) / 1000
@@ -131,6 +139,20 @@ async def _list_repos(client: BackrestClient) -> list[dict]:
     """
     cfg = await client.post("GetConfig", {})
     return cfg.get("repos", []) or []
+
+
+async def _get_operations_raw(client: BackrestClient, selector: dict, last_n: int) -> list:
+    """Call GetOperations and return the raw operation dicts.
+
+    GetOperations returns nothing without a selector, so callers pass one (OpSelector
+    matches repos on repoGuid, not the human ID).
+    """
+    body: dict = {"lastN": last_n}
+    if selector:
+        body["selector"] = selector
+    raw = await client.post("GetOperations", body)
+    ops = raw.get("operations") if isinstance(raw, dict) else None
+    return [o for o in ops if isinstance(o, dict)] if isinstance(ops, list) else []
 
 
 async def _resolve_repo_guid(client: BackrestClient, repo_id: str) -> str:
@@ -151,6 +173,7 @@ async def _resolve_repo_guid(client: BackrestClient, repo_id: str) -> str:
 # Read-only tools — always registered
 # ---------------------------------------------------------------------------
 
+
 @mcp.tool()
 async def get_health() -> dict:
     """Check that Backrest is reachable and credentials are valid.
@@ -164,7 +187,11 @@ async def get_health() -> dict:
     t0 = time.perf_counter()
     try:
         cfg = await client.post("GetConfig", {})
-        await emit_metric("backrest_tool", {"tool": "get_health", "status": "ok"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_health", "status": "ok"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return {
             "status": "ok",
             "backrest_url": backrest_url,
@@ -175,7 +202,11 @@ async def get_health() -> dict:
     except httpx.HTTPStatusError as e:
         status = "auth_failed" if e.response.status_code in (401, 403) else "unreachable"
         log.error("get_health", status=status, http_status=e.response.status_code)
-        return {"status": status, "backrest_url": backrest_url, "http_status": e.response.status_code}
+        return {
+            "status": status,
+            "backrest_url": backrest_url,
+            "http_status": e.response.status_code,
+        }
     except Exception as e:
         log.error("get_health", status="unreachable", error=str(e))
         return {"status": "unreachable", "backrest_url": backrest_url}
@@ -204,16 +235,197 @@ async def get_config() -> dict:
     t0 = time.perf_counter()
     try:
         result = project_config(await client.post("GetConfig", {}))
-        await emit_metric("backrest_tool", {"tool": "get_config"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_config"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return result
     except Exception as e:
         return _tool_error("get_config", e)
 
 
 @mcp.tool()
+async def list_plans() -> dict:
+    """List the backup plans: which paths each backs up, to which repo, and when.
+
+    Returns the same secret-free projection of each plan as get_config: id, repo, paths,
+    excludes, iexcludes, schedule, retention, skipIfUnchanged, backupFlagCount and hooks
+    (action type names only). Prefer this to get_config when you only need plans.
+    """
+    client = get_client()
+    t0 = time.perf_counter()
+    try:
+        plans = project_config(await client.post("GetConfig", {})).get("plans", [])
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "list_plans"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(plans)},
+        )
+        return {"plans": plans, "count": len(plans)}
+    except Exception as e:
+        return _tool_error("list_plans", e)
+
+
+@mcp.tool()
+async def find_plan_for_path(path: str) -> dict:
+    """Find which backup plans cover an absolute path, and whether an exclude drops it.
+
+    Args:
+        path: An absolute path on the backed-up host, e.g. "/home/ted/Documents/x.txt".
+              Pure string matching: the path does not have to exist and the filesystem
+              is never read.
+
+    Returns every plan with a `paths` entry equal to the path or one of its ancestors.
+    Each carries `covered_by` (that entry), `excluded_by` (the first `excludes` or
+    `iexcludes` pattern that matches, or null), `repo` and `schedule`. `backed_up` is true
+    when at least one plan covers the path without excluding it.
+
+    Exclude matching approximates restic's (no `!` negation, exclude files, size or
+    marker-file excludes, or excludes passed in backup flags), so the response says
+    "match": "approximate". Check list_snapshot_files to confirm.
+    """
+    try:
+        norm = normalise_path(path)
+    except ValueError as e:
+        return _tool_error("find_plan_for_path", e)
+    client = get_client()
+    t0 = time.perf_counter()
+    try:
+        plans = project_config(await client.post("GetConfig", {})).get("plans", [])
+        matches = []
+        for plan in plans:
+            root = covering_root(plan, norm)
+            if root is None:
+                continue
+            matches.append(
+                {
+                    "plan_id": plan.get("id"),
+                    "repo": plan.get("repo"),
+                    "covered_by": root,
+                    "excluded_by": excluded_by(plan, norm),
+                    "schedule": plan.get("schedule"),
+                }
+            )
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "find_plan_for_path"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(matches)},
+        )
+        return {
+            "path": norm,
+            "match": "approximate",
+            "backed_up": any(m["excluded_by"] is None for m in matches),
+            "plans": matches,
+        }
+    except Exception as e:
+        return _tool_error("find_plan_for_path", e)
+
+
+# Operations scanned per plan when looking for the last good backup. Hooks, index, forget
+# and prune runs are operations too, so this is several backups' worth, not 200 backups.
+_FRESHNESS_LAST_N = 200
+_GOOD_BACKUP = ("STATUS_SUCCESS", "STATUS_WARNING")
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _as_int(value: object) -> int | None:
+    # int64 fields arrive as JSON strings in the connect encoding.
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return None
+
+
+@mcp.tool()
+async def get_backup_freshness(max_age_hours: float | None = None) -> dict:
+    """Report, per plan, when it last backed up successfully and whether that is stale.
+
+    Args:
+        max_age_hours: Mark a plan stale when its last good backup is older than this.
+            When omitted, each plan's own schedule decides: 2x maxFrequencyHours,
+            2x maxFrequencyDays, or 26 hours for a cron schedule.
+
+    A good backup is a backup operation that ended in STATUS_SUCCESS or STATUS_WARNING.
+    For each plan: `last_success` (UTC), `age_hours`, `last_status` (of the most recent
+    backup operation, good or not), `threshold_hours`, `threshold_source` and `state`:
+      - "ok": a good backup within the threshold
+      - "stale": none within the threshold, or none among the plan's last 200 operations
+      - "unscheduled": the schedule is disabled or missing; never stale
+    `stale` is true only for "stale". The response carries `stale_count` and
+    `unscheduled_count`: a disabled schedule produces no backups and is never counted as
+    stale, so anything alerting on freshness should look at both. Read-only.
+    """
+    if max_age_hours is not None and not (0 < max_age_hours <= 24 * 366):
+        return _tool_error(
+            "get_backup_freshness", ValueError("max_age_hours must be > 0 and <= 8784")
+        )
+    client = get_client()
+    t0 = time.perf_counter()
+    try:
+        cfg = project_config(await client.post("GetConfig", {}))
+        guids = {r.get("id"): r.get("guid") for r in cfg.get("repos", [])}
+        now_ms = _now() * 1000
+        out = []
+        for plan in cfg.get("plans", []):
+            threshold, source = stale_threshold(plan.get("schedule"), max_age_hours)
+            selector: dict = {"planId": plan.get("id")}
+            if guids.get(plan.get("repo")):
+                selector["repoGuid"] = guids[plan.get("repo")]
+            ops = await _get_operations_raw(client, selector, _FRESHNESS_LAST_N)
+            backups = [o for o in ops if "operationBackup" in o]
+            backups.sort(key=lambda o: _as_int(o.get("unixTimeStartMs")) or 0, reverse=True)
+            good_ends = []
+            for o in backups:
+                if o.get("status") in _GOOD_BACKUP:
+                    end = _as_int(o.get("unixTimeEndMs")) or _as_int(o.get("unixTimeStartMs"))
+                    if end:
+                        good_ends.append(end)
+            last_ms = max(good_ends) if good_ends else None
+            age = round((now_ms - last_ms) / 3_600_000, 2) if last_ms is not None else None
+            if threshold is None:
+                state = "unscheduled"
+            elif age is None or age > threshold:
+                state = "stale"
+            else:
+                state = "ok"
+            out.append(
+                {
+                    "plan_id": plan.get("id"),
+                    "repo": plan.get("repo"),
+                    "last_success": _fmt_ms(last_ms) if last_ms is not None else None,
+                    "age_hours": age,
+                    "last_status": backups[0].get("status") if backups else None,
+                    "threshold_hours": threshold,
+                    "threshold_source": source,
+                    "state": state,
+                    "stale": state == "stale",
+                }
+            )
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_backup_freshness"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(out)},
+        )
+        return {
+            "plans": out,
+            "stale_count": sum(1 for p in out if p["stale"]),
+            # Reported beside stale_count so a monitor cannot read "backups stopped because
+            # the schedule was turned off" as healthy (audit p2 F-05).
+            "unscheduled_count": sum(1 for p in out if p["state"] == "unscheduled"),
+            "checked_at": _fmt_ms(int(now_ms)),
+        }
+    except Exception as e:
+        return _tool_error("get_backup_freshness", e)
+
+
+@mcp.tool()
 async def list_snapshots(
-    repo_id: Optional[str] = None,
-    plan_id: Optional[str] = None,
+    repo_id: str | None = None,
+    plan_id: str | None = None,
 ) -> dict:
     """List snapshots in a Backrest repo, optionally filtered by repo or plan.
 
@@ -254,7 +466,11 @@ async def list_snapshots(
                 s.repoId = rid
                 merged.append(s)
 
-        await emit_metric("backrest_tool", {"tool": "list_snapshots"}, {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(merged)})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "list_snapshots"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(merged)},
+        )
         return {"snapshots": [s.model_dump(exclude_none=True) for s in merged]}
     except Exception as e:
         return _tool_error("list_snapshots", e)
@@ -285,13 +501,21 @@ async def list_snapshot_files(
     t0 = time.perf_counter()
     try:
         repo_guid = await _resolve_repo_guid(client, repo_id)
-        # SECURITY[deferred]: path not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
+        # SECURITY[deferred]: path not validated — goes in JSON body to local HTTP API;
+        # Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         body = {"repoGuid": repo_guid, "snapshotId": snapshot_id, "path": path}
         raw = await client.post("ListSnapshotFiles", body)
         parsed = ListSnapshotFilesResponse.model_validate(raw)
-        await emit_metric("backrest_tool", {"tool": "list_snapshot_files"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
-        return {"path": parsed.path, "entries": [e.model_dump(exclude_none=True) for e in parsed.entries]}
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "list_snapshot_files"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
+        return {
+            "path": parsed.path,
+            "entries": [e.model_dump(exclude_none=True) for e in parsed.entries],
+        }
     except Exception as e:
         return _tool_error("list_snapshot_files", e)
 
@@ -308,7 +532,11 @@ async def get_summary() -> dict:
     try:
         raw = await client.post("GetSummaryDashboard", {})
         parsed = SummaryDashboard.model_validate(raw)
-        await emit_metric("backrest_tool", {"tool": "get_summary"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_summary"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return parsed.model_dump(exclude_none=True)
     except Exception as e:
         return _tool_error("get_summary", e)
@@ -316,8 +544,8 @@ async def get_summary() -> dict:
 
 @mcp.tool()
 async def get_operations(
-    plan_id: Optional[str] = None,
-    repo_id: Optional[str] = None,
+    plan_id: str | None = None,
+    repo_id: str | None = None,
     limit: int = 20,
 ) -> dict:
     """List recent backup operations, optionally filtered by plan or repo.
@@ -358,15 +586,16 @@ async def get_operations(
 
         ops: list = []
         for sel in selectors:
-            body: dict = {"lastN": limit}
-            if sel:
-                body["selector"] = sel
-            raw = await client.post("GetOperations", body)
-            ops.extend(OperationList.model_validate(raw).operations)
+            raw_ops = await _get_operations_raw(client, sel, limit)
+            ops.extend(OperationList.model_validate({"operations": raw_ops}).operations)
 
         ops.sort(key=lambda o: o.unixTimeStartMs or 0, reverse=True)
         ops = ops[:limit]
-        await emit_metric("backrest_tool", {"tool": "get_operations"}, {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(ops)})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_operations"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "count": len(ops)},
+        )
 
         lines = []
         for op in ops:
@@ -409,7 +638,11 @@ async def get_logs(ref: str, max_bytes: int = 100_000) -> dict:
     t0 = time.perf_counter()
     try:
         raw = await client.post_streaming("GetLogs", {"ref": ref})
-        await emit_metric("backrest_tool", {"tool": "get_logs"}, {"duration_ms": (time.perf_counter() - t0) * 1000, "bytes": len(raw)})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_logs"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000, "bytes": len(raw)},
+        )
         text = raw.decode("utf-8", "replace")
         truncated = len(text) > max_bytes
         if truncated:
@@ -440,10 +673,15 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
     t0 = time.perf_counter()
     try:
         # op_id is an int64 proto field; connect JSON accepts a string-encoded int.
-        # SECURITY[deferred]: file_path not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
+        # SECURITY[deferred]: file_path not validated — goes in JSON body to local HTTP API;
+        # Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         raw = await client.post("GetDownloadURL", {"opId": operation_id, "filePath": file_path})
-        await emit_metric("backrest_tool", {"tool": "get_download_url"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+        await emit_metric(
+            "backrest_tool",
+            {"tool": "get_download_url"},
+            {"duration_ms": (time.perf_counter() - t0) * 1000},
+        )
         return {"url": raw.get("value"), "operation_id": operation_id, "file_path": file_path}
     except Exception as e:
         return _tool_error("get_download_url", e)
@@ -454,6 +692,7 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
 # ---------------------------------------------------------------------------
 
 if not READONLY:
+
     @mcp.tool()
     async def trigger_backup(
         plan_id: str,
@@ -477,7 +716,11 @@ if not READONLY:
         t0 = time.perf_counter()
         try:
             result = await client.post("Backup", body)
-            await emit_metric("backrest_tool", {"tool": "trigger_backup"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "trigger_backup"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("trigger_backup", e)
@@ -512,7 +755,11 @@ if not READONLY:
         t0 = time.perf_counter()
         try:
             result = await client.post("DoRepoTask", body)
-            await emit_metric("backrest_tool", {"tool": "do_repo_task"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "do_repo_task"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("do_repo_task", e)
@@ -535,7 +782,11 @@ if not READONLY:
         t0 = time.perf_counter()
         try:
             result = await client.post("Cancel", {"value": operation_id})
-            await emit_metric("backrest_tool", {"tool": "cancel_operation"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "cancel_operation"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("cancel_operation", e)
@@ -546,12 +797,13 @@ if not READONLY:
 # ---------------------------------------------------------------------------
 
 if ALLOW_DESTRUCTIVE:
+
     @mcp.tool()
     async def forget_snapshot(
         snapshot_id: str,
         repo_id: str,
         confirm: str,
-        plan_id: Optional[str] = None,
+        plan_id: str | None = None,
     ) -> dict:
         """Forget (permanently delete) a specific snapshot from a Backrest repo.
 
@@ -574,11 +826,18 @@ if ALLOW_DESTRUCTIVE:
         expected = f"FORGET:{snapshot_id}"
         if confirm != expected:
             return {
-                "content": [{"type": "text", "text": f'Confirmation required. Pass confirm="{expected}" to proceed.'}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f'Confirmation required. Pass confirm="{expected}" to proceed.',
+                    }
+                ],
                 "isError": True,
             }
 
-        audit_log("forget_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "plan_id": plan_id})
+        audit_log(
+            "forget_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "plan_id": plan_id}
+        )
         client = get_client()
         body: dict = {"repoId": repo_id, "snapshotId": snapshot_id}
         if plan_id:
@@ -586,7 +845,11 @@ if ALLOW_DESTRUCTIVE:
         t0 = time.perf_counter()
         try:
             result = await client.post("Forget", body)
-            await emit_metric("backrest_tool", {"tool": "forget_snapshot"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "forget_snapshot"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("forget_snapshot", e)
@@ -597,11 +860,12 @@ if ALLOW_DESTRUCTIVE:
         repo_id: str,
         path: str,
         target: str,
-        plan_id: Optional[str] = None,
+        plan_id: str | None = None,
     ) -> dict:
         """Restore a snapshot (or a path within it) to a target directory.
 
-        The target must be under BACKREST_RESTORE_ALLOWED_PREFIX (default: /tmp/backrest-restore/).
+        The target must be under BACKREST_RESTORE_ALLOWED_PREFIX (default: ~/backrest-restore/),
+        which must be a real directory owned by the server user with mode 0700.
         This prevents accidental restores over live data. After verifying the restored files,
         move them to the desired location manually.
 
@@ -621,23 +885,41 @@ if ALLOW_DESTRUCTIVE:
             validate_backrest_id("repo_id", repo_id)
         except ValueError as e:
             return _tool_error("restore_snapshot", e)
+        refusal = check_restore_prefix(RESTORE_ALLOWED_PREFIX)
+        if refusal:
+            return {"content": [{"type": "text", "text": refusal}], "isError": True}
         allowed = pathlib.Path(os.path.realpath(RESTORE_ALLOWED_PREFIX))
         resolved = pathlib.Path(os.path.realpath(target))
         if not resolved.is_relative_to(allowed):
             return {
-                "content": [{"type": "text", "text": (
-                    f"Restore target must be under {RESTORE_ALLOWED_PREFIX}. "
-                    f"Restore to a staging path, verify, then move manually."
-                )}],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Restore target must be under {RESTORE_ALLOWED_PREFIX}. "
+                            f"Restore to a staging path, verify, then move manually."
+                        ),
+                    }
+                ],
                 "isError": True,
             }
 
         # Send and record the resolved path, not the raw one: a symlink swapped in after
         # the prefix check above could otherwise redirect the restore (TOCTOU).
         resolved_target = str(resolved)
-        audit_log("restore_snapshot", {"snapshot_id": snapshot_id, "repo_id": repo_id, "path": path, "target": resolved_target, "plan_id": plan_id})
+        audit_log(
+            "restore_snapshot",
+            {
+                "snapshot_id": snapshot_id,
+                "repo_id": repo_id,
+                "path": path,
+                "target": resolved_target,
+                "plan_id": plan_id,
+            },
+        )
         client = get_client()
-        # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body to local HTTP API; Backrest validates server-side.
+        # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body
+        # to local HTTP API; Backrest validates server-side.
         # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         body: dict = {
             "snapshotId": snapshot_id,
@@ -650,7 +932,11 @@ if ALLOW_DESTRUCTIVE:
         t0 = time.perf_counter()
         try:
             result = await client.post("Restore", body)
-            await emit_metric("backrest_tool", {"tool": "restore_snapshot"}, {"duration_ms": (time.perf_counter() - t0) * 1000})
+            await emit_metric(
+                "backrest_tool",
+                {"tool": "restore_snapshot"},
+                {"duration_ms": (time.perf_counter() - t0) * 1000},
+            )
             return result
         except Exception as e:
             return _tool_error("restore_snapshot", e)
@@ -658,6 +944,7 @@ if ALLOW_DESTRUCTIVE:
 
 def main() -> None:
     from backrest_mcp.observability import configure_logging
+
     configure_logging()
 
     if TRANSPORT == "http":

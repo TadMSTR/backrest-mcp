@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.5.0] — 2026-10-20
+
+### Security
+
+- **Nested policy messages are projected through their own allowlists** (p1 audit F-04).
+  `get_config` copied `prunePolicy`, `checkPolicy`, `forgetPolicy`, `commandPrefix`,
+  `schedule` and `retention` whole. That was safe against Backrest v1.13.0, but a field a
+  later Backrest added to one of them would have passed straight through. Each now has an
+  allowlist of its v1.13.0 field names, recursing into `Schedule`, `RetentionPolicy` and
+  `TimeBucketedCounts`; a scalar slot accepts only a scalar. A test pins the names, and the
+  live conformance run warns, by key name only, when Backrest sends one that is not listed.
+- **The restore prefix moved out of `/tmp` and is checked before use** (vikunja#1182).
+  The default `BACKREST_RESTORE_ALLOWED_PREFIX` was `/tmp/backrest-restore/`, which did
+  not exist on forge; `realpath()` would have followed a symlink planted at that name by
+  any local user. The default is now `~/backrest-restore/`, expanded at load, and
+  `ecosystem.config.js` (which set the `/tmp` path explicitly) uses the same directory.
+  `restore_snapshot` now refuses, without calling Backrest, a prefix that is missing, a
+  symlink, not a directory, not owned by the server user, or not mode 0700. (0700, not
+  just "not writable": restic restores snapshot modes, so under a 0755 prefix a restored
+  tree that was private could be read by other local users.) The
+  window between the check and Backrest creating the target is not closed by this; it
+  cannot be from this side. `restore_snapshot` remains unregistered in the default
+  configuration.
+
+- **Deploy from the lock.** The documented install/update path is now
+  `uv sync --frozen --extra dev` into the venv, not `pip install -e .`, which leaves
+  already-installed dependencies at whatever version they were. The production venv held
+  35 known vulnerabilities in 8 packages (pyjwt, cryptography, starlette, mcp, urllib3,
+  anyio, certifi, pydantic-settings) that CI's lock audit could not see; the locked set
+  has none (audit F-01).
+- **Live leak checks match the JSON-escaped secret** as well as the raw one, so a
+  password with a quote, backslash or non-ASCII character cannot slip past them.
+
+### Added
+
+- **`list_plans`**: the projected plans (paths, excludes, repo, schedule, retention,
+  hooks by type), without reading through `get_config`.
+- **`find_plan_for_path(path)`**: which plans cover an absolute path, and the first
+  `excludes`/`iexcludes` pattern that drops it. Pure string matching that approximates
+  restic's exclude rules (anchored, unanchored basename, `*`, `?`, `[...]`, `**`,
+  case-insensitive `iexcludes`; no negation or exclude files); the response says
+  `"match": "approximate"`. Paths are capped at 4096 characters and 256 components, and
+  matching is linear in components × pattern length.
+- **`get_backup_freshness(max_age_hours?)`**: per plan, the last backup that ended
+  `SUCCESS` or `WARNING`, its age, the latest backup status, and `ok`/`stale`/`unscheduled`.
+  The threshold is the argument, else 2× `maxFrequencyHours`, 2× `maxFrequencyDays`, or
+  26 h for a cron schedule. Disabled schedules are never stale; `unscheduled_count` is
+  reported beside `stale_count` so a monitor sees them.
+- All three read the config through `redact.py` and are tested against the `LEAKCANARY`
+  fixture. The server instructions point coverage questions at them.
+- **`scripts/run_live_conformance.py`**: runs the live tests with `BACKREST_*` read
+  in-process from `BACKREST_LIVE_ENV_FILE` (default `~/.secrets/forge.env`); exits non-zero
+  on a failure or when every test skipped. Live tests added for the three new tools.
+- **NATS credentials** (vikunja#4): `NATS_CREDS_FILE`, or `NATS_USER` + `NATS_PASSWORD`.
+  NATS telemetry is still off unless `NATS_URL` is set.
+
+### Changed
+
+- **`src/` layout.** The package is `src/backrest_mcp/`. An editable install must be
+  redone (`pip install -e .`) before `python -m backrest_mcp.server` works from the repo
+  root again.
+- **Bounded dependency ranges** and a committed **`uv.lock`**; CI installs with
+  `uv sync --frozen` and audits the locked set (runtime and dev separately).
+- **Repo standard (baseline, public):** SHA-pinned actions with version comments,
+  top-level `permissions: contents: read` in every workflow, gitleaks secret scanning
+  (push, PR, weekly full history), CodeQL, OSSF Scorecard, CODEOWNERS, Dependabot for `uv`
+  and `github-actions`, ruff with `E F W I UP B SIM RUF` plus `ruff format`, and a coverage
+  floor of 96% (measured 96.27%).
+- CI pins the uv version `setup-uv` installs (`0.13.4`), so the lock check, the audit's
+  export and the wheel build do not drift between runs.
+- Restore tests no longer depend on the session umask (they failed under forge's 0002).
+- `.gitignore`: `*.key`, `*.pem`, `*.p12`, `*.pfx`; the bare `core.*` (which also matched
+  `core.py`) is now `/core` and `core.[0-9]*` (vikunja#581).
+
+### Not added
+
+- `index_snapshots`: `do_repo_task(task="index")` already sends `TASK_INDEX_SNAPSHOTS`
+  behind the same `BACKREST_READONLY=false` gate.
+
 ## [0.4.1] — 2026-10-20
 
 ### Security

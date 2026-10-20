@@ -4,35 +4,44 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "backrest-mcp"
-version = "0.4.1"
+version = "0.5.0"
 description = "FastMCP Python MCP server wrapping the Backrest backup manager REST API"
 requires-python = ">=3.11"
+# BOUNDED RANGES, NOT BARE FLOORS (`ships`: repo-standards' Dependencies block). Floors are
+# what the production venv runs (measured 2026-10-20: fastmcp 3.4.0, httpx 0.28.1,
+# pydantic 2.13.4, structlog 25.5.0); ceilings are the next major, or the next minor for a
+# 0.x package. fastmcp 4 is a separate migration, not a Dependabot bump.
 dependencies = [
-    "fastmcp>=3.0,<4.0",
-    "httpx>=0.27,<1.0",
-    "pydantic>=2.0,<3.0",
-    "structlog>=24.0,<27.0",
+    "fastmcp>=3.4,<4",
+    "httpx>=0.28,<0.29",
+    "pydantic>=2.13,<3",
+    "structlog>=25.5,<26",
 ]
 
 [project.optional-dependencies]
-influxdb = ["influxdb3-python"]
+# Off by default and not installed in the production venv. Floors are the PyPI releases
+# current on 2026-10-20; influxdb3-python is 0.x, so its ceiling is the next minor.
+influxdb = ["influxdb3-python>=0.21,<0.22"]
 otel = [
-    "opentelemetry-sdk>=1.20",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
+    "opentelemetry-sdk>=1.20,<2",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20,<2",
 ]
-nats = ["nats-py"]
+nats = ["nats-py>=2.0,<3"]
 dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "pytest-cov>=5.0",
-    "respx>=0.20",
+    "pytest>=8.0,<10",
+    "pytest-asyncio>=0.23,<2",
+    "pytest-cov>=5.0,<8",
+    "respx>=0.21,<0.24",
+    # Pinned exactly: an unpinned formatter is a gate whose result depends on when it ran.
+    # Bumps arrive through Dependabot's dev-tools group.
+    "ruff==0.16.10",
 ]
 
 [project.scripts]
 backrest-mcp = "backrest_mcp.server:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
+where = ["src"]
 include = ["backrest_mcp*"]
 
 [tool.pytest.ini_options]
@@ -43,5 +52,14 @@ target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
-# pyflakes (F), import sorting (I), and the essential pycodestyle checks.
-select = ["E4", "E7", "E9", "F", "I"]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.coverage.report]
+# COVERAGE FLOOR — B9/F8, set to the measurement.
+#
+# Measured 96.27% on 2026-10-20 for v0.5.0 (267 passed, 10 skipped; the skips are the live
+# file, which needs a real Backrest and runs via scripts/run_live_conformance.py).
+# Floor = measured whole number; ratchet up, never down. If coverage falls, test the new
+# code, or explain the drop in CHANGELOG.md.
+fail_under = 96
+show_missing = true

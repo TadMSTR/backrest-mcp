@@ -67,21 +67,23 @@ class BackrestClient:
         log.debug("backrest_stream_request", method=method)
         msg = json.dumps(body).encode()
         envelope = struct.pack(">BI", 0, len(msg)) + msg
-        async with httpx.AsyncClient(auth=self._auth, timeout=120.0) as client:
-            async with client.stream(
+        async with (
+            httpx.AsyncClient(auth=self._auth, timeout=120.0) as client,
+            client.stream(
                 "POST",
                 url,
                 content=envelope,
                 headers={"content-type": "application/connect+json"},
-            ) as r:
-                r.raise_for_status()
-                buf = bytearray()
-                async for chunk in r.aiter_bytes():
-                    buf += chunk
-                    if len(buf) > _MAX_STREAM_BYTES:
-                        raise BackrestStreamError(
-                            f"streaming response exceeded {_MAX_STREAM_BYTES}-byte cap"
-                        )
+            ) as r,
+        ):
+            r.raise_for_status()
+            buf = bytearray()
+            async for chunk in r.aiter_bytes():
+                buf += chunk
+                if len(buf) > _MAX_STREAM_BYTES:
+                    raise BackrestStreamError(
+                        f"streaming response exceeded {_MAX_STREAM_BYTES}-byte cap"
+                    )
         return _decode_connect_stream(bytes(buf))
 
 
