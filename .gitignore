@@ -2,14 +2,34 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
-.env
-*.env
+build/
 .venv/
 venv/
 *.log
-core.*
-*.core
 .coverage
 .coverage.*
 htmlcov/
 .pytest_cache/
+.ruff_cache/
+
+# Core dumps can hold process memory, credentials included. Anchored: a bare `core.*`
+# also matches source files such as `core.py` (#581, SC-02).
+/core
+core.[0-9]*
+*.core
+
+# Credentials written as environment files (B6).
+.env
+*.env
+
+# Private key material (B6). This repo is public on GitHub; history is permanent.
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Audit scratch: ci.yml copies each pylock export into its own directory.
+.audit-runtime/
+.audit-dev/
+pylock.runtime.toml
+pylock.dev.toml
