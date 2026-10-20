@@ -19,7 +19,6 @@ Tool registration is gated by safety flags from backrest_mcp.safety:
 from __future__ import annotations
 
 import datetime
-import json
 import os
 import pathlib
 import time
