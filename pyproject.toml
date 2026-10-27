@@ -34,7 +34,7 @@ dev = [
     "respx>=0.21,<0.24",
     # Pinned exactly: an unpinned formatter is a gate whose result depends on when it ran.
     # Bumps arrive through Dependabot's dev-tools group.
-    "ruff==0.16.10",
+    "ruff==0.17.2",
 ]
 
 [project.scripts]
