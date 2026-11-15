@@ -8,8 +8,9 @@
   `list_snapshot_files` `path`, `get_download_url` `file_path` and `restore_snapshot`
   `path` went into the request body unchecked, relying on Backrest to refuse a bad one.
   A new `validate_snapshot_path()` next to `validate_backrest_id()` refuses a path that is
-  not absolute, is longer than 4096 characters, has a `..` segment, or contains a control
-  character (NUL included). `restore_snapshot` refuses before writing its audit-log line.
+  not absolute, is longer than 4096 characters, has a `..` segment, or contains an ASCII
+  control character (U+0000–U+001F or DEL, NUL included). C1 controls and the Unicode
+  line separators are not refused; `..` is refused by segment either way. `restore_snapshot` refuses before writing its audit-log line.
   The error never echoes the path. The three `SECURITY[deferred]` markers are gone.
 - **Dependency floors for two transitive advisories.** `dnspython>=2.9.2`
   (CVE-2026-128089, via email-validator) and `opentelemetry-api>=1.45.2`

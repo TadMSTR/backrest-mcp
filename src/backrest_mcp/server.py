@@ -273,7 +273,7 @@ async def find_plan_for_path(path: str) -> dict:
     """Find which backup plans cover an absolute path, and whether an exclude drops it.
 
     Args:
-        path: An absolute path on the backed-up host, e.g. "/home/ted/Documents/x.txt".
+        path: An absolute path on the backed-up host, e.g. "/home/user/Documents/x.txt".
               Pure string matching: the path does not have to exist and the filesystem
               is never read.
 
@@ -490,7 +490,7 @@ async def list_snapshot_files(
                  resolved to the repo GUID that the Backrest ListSnapshotFiles API expects.
         snapshot_id: Snapshot ID to browse.
         path: Directory path within the snapshot to list. Defaults to root "/". Must be
-              absolute; a '..' segment or a control character is refused.
+              absolute; a '..' segment or an ASCII control character is refused.
 
     Returns a list of file/directory entries at the given path.
     """
@@ -662,7 +662,7 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
     Args:
         operation_id: The restore operation's ID (from get_operations).
         file_path: Path of the file within the restored output to download. Must be
-                   absolute; a '..' segment or a control character is refused.
+                   absolute; a '..' segment or an ASCII control character is refused.
 
     Returns {"url": ...}. Read-only (produces a signed URL; writes nothing).
     """
@@ -874,7 +874,7 @@ if ALLOW_DESTRUCTIVE:
             snapshot_id: Snapshot ID to restore from.
             repo_id: Repository containing the snapshot.
             path: Path within the snapshot to restore (e.g. "/home/user/docs" or "/"). Must
-                  be absolute; a '..' segment or a control character is refused.
+                  be absolute; a '..' segment or an ASCII control character is refused.
             target: Local filesystem path to restore to. Must be under the allowed prefix.
             plan_id: Optional plan ID.
 

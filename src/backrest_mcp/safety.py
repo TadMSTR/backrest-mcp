@@ -44,7 +44,8 @@ def validate_snapshot_path(name: str, value: str) -> None:
     """Validate a path inside a snapshot or restore output before it is sent to Backrest.
 
     Accepted: an absolute path of at most 4096 characters with no ``..`` segment and no
-    control character (NUL included). Backrest is not relied on to refuse these.
+    ASCII control character (U+0000-U+001F or DEL, NUL included). C1 controls and the
+    Unicode line separators are not refused. Backrest is not relied on to refuse these.
     The message never echoes the value: it may carry control characters.
 
     Raises ValueError on the first rule that fails.
