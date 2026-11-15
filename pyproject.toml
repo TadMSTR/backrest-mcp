@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "backrest-mcp"
-version = "0.5.0"
+version = "0.5.1"
 description = "FastMCP Python MCP server wrapping the Backrest backup manager REST API"
 requires-python = ">=3.11"
 # BOUNDED RANGES, NOT BARE FLOORS (`ships`: repo-standards' Dependencies block). Floors are
@@ -16,6 +16,11 @@ dependencies = [
     "httpx>=0.28,<0.29",
     "pydantic>=2.13,<3",
     "structlog>=25.5,<26",
+    # SECURITY FLOORS (2026-11-15) for transitive dependencies, so a pip install over an
+    # existing venv upgrades them: dnspython 2.9.2 fixes CVE-2026-128089 (via
+    # email-validator); opentelemetry-api 1.45.2 fixes CVE-2026-126360 (via fastmcp).
+    "dnspython>=2.9.2,<3",
+    "opentelemetry-api>=1.45.2,<2",
 ]
 
 [project.optional-dependencies]

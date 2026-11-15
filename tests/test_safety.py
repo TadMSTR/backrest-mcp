@@ -184,6 +184,40 @@ async def test_restore_path_traversal_rejected(monkeypatch, tmp_path):
     assert "must be under" in text
 
 
+@pytest.mark.parametrize("bad_path", ["../../etc", "/home/../etc", "/a\x00b", ""])
+async def test_restore_bad_source_path_rejected(monkeypatch, tmp_path, bad_path):
+    """vikunja#3: the in-snapshot source path is refused before the audit log or any call."""
+    restore_prefix = _private_dir(tmp_path / "restore")
+    audit = tmp_path / "audit.jsonl"
+    monkeypatch.setenv("BACKREST_AUDIT_LOG", str(audit))
+    mcp = _reload_server(
+        monkeypatch, readonly="false", destructive="true", restore_prefix=str(restore_prefix)
+    )
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post(url__startswith=f"{BASE_URL}/v1.Backrest/")
+        result = await mcp.call_tool(
+            "restore_snapshot",
+            {
+                "snapshot_id": "abc123",
+                "repo_id": "local",
+                "path": bad_path,
+                "target": str(restore_prefix / "docs"),
+            },
+        )
+    assert "error" in json.loads(result.content[0].text)
+    assert route.call_count == 0
+    assert not audit.exists()
+
+
+def test_validate_snapshot_path_messages_do_not_echo_value():
+    from backrest_mcp.safety import validate_snapshot_path
+
+    for bad in ("rel\x00LEAK", "/x/../LEAK", "/LEAK\n", "/" + "LEAK" * 2000):
+        with pytest.raises(ValueError) as exc:
+            validate_snapshot_path("path", bad)
+        assert "LEAK" not in str(exc.value)
+
+
 async def test_restore_sibling_prefix_rejected(monkeypatch, tmp_path):
     """restore_snapshot with sibling directory name matching the prefix → isError (F-01)."""
     restore_prefix = _private_dir(tmp_path / "restore")

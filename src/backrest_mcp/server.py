@@ -46,6 +46,7 @@ from .safety import (
     audit_log,
     check_restore_prefix,
     validate_backrest_id,
+    validate_snapshot_path,
 )
 
 log = structlog.get_logger(__name__)
@@ -488,7 +489,8 @@ async def list_snapshot_files(
         repo_id: The repository ID (as shown by list_snapshots / get_config). It is
                  resolved to the repo GUID that the Backrest ListSnapshotFiles API expects.
         snapshot_id: Snapshot ID to browse.
-        path: Directory path within the snapshot to list. Defaults to root "/".
+        path: Directory path within the snapshot to list. Defaults to root "/". Must be
+              absolute; a '..' segment or a control character is refused.
 
     Returns a list of file/directory entries at the given path.
     """
@@ -496,14 +498,12 @@ async def list_snapshot_files(
     try:
         validate_backrest_id("repo_id", repo_id)
         validate_backrest_id("snapshot_id", snapshot_id)
+        validate_snapshot_path("path", path)
     except ValueError as e:
         return _tool_error("list_snapshot_files", e)
     t0 = time.perf_counter()
     try:
         repo_guid = await _resolve_repo_guid(client, repo_id)
-        # SECURITY[deferred]: path not validated — goes in JSON body to local HTTP API;
-        # Backrest validates server-side.
-        # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         body = {"repoGuid": repo_guid, "snapshotId": snapshot_id, "path": path}
         raw = await client.post("ListSnapshotFiles", body)
         parsed = ListSnapshotFilesResponse.model_validate(raw)
@@ -661,21 +661,20 @@ async def get_download_url(operation_id: str, file_path: str) -> dict:
 
     Args:
         operation_id: The restore operation's ID (from get_operations).
-        file_path: Path of the file within the restored output to download.
+        file_path: Path of the file within the restored output to download. Must be
+                   absolute; a '..' segment or a control character is refused.
 
     Returns {"url": ...}. Read-only (produces a signed URL; writes nothing).
     """
     try:
         validate_backrest_id("operation_id", operation_id)
+        validate_snapshot_path("file_path", file_path)
     except ValueError as e:
         return _tool_error("get_download_url", e)
     client = get_client()
     t0 = time.perf_counter()
     try:
         # op_id is an int64 proto field; connect JSON accepts a string-encoded int.
-        # SECURITY[deferred]: file_path not validated — goes in JSON body to local HTTP API;
-        # Backrest validates server-side.
-        # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         raw = await client.post("GetDownloadURL", {"opId": operation_id, "filePath": file_path})
         await emit_metric(
             "backrest_tool",
@@ -874,7 +873,8 @@ if ALLOW_DESTRUCTIVE:
         Args:
             snapshot_id: Snapshot ID to restore from.
             repo_id: Repository containing the snapshot.
-            path: Path within the snapshot to restore (e.g. "/home/ted/docs" or "/").
+            path: Path within the snapshot to restore (e.g. "/home/user/docs" or "/"). Must
+                  be absolute; a '..' segment or a control character is refused.
             target: Local filesystem path to restore to. Must be under the allowed prefix.
             plan_id: Optional plan ID.
 
@@ -883,6 +883,7 @@ if ALLOW_DESTRUCTIVE:
         try:
             validate_backrest_id("snapshot_id", snapshot_id)
             validate_backrest_id("repo_id", repo_id)
+            validate_snapshot_path("path", path)
         except ValueError as e:
             return _tool_error("restore_snapshot", e)
         refusal = check_restore_prefix(RESTORE_ALLOWED_PREFIX)
@@ -918,9 +919,6 @@ if ALLOW_DESTRUCTIVE:
             },
         )
         client = get_client()
-        # SECURITY[deferred]: path (within-snapshot source) not validated — goes in JSON body
-        # to local HTTP API; Backrest validates server-side.
-        # Ticket: BKRST-2. Audit: 2026-06-04/backrest-mcp-2026-06.
         body: dict = {
             "snapshotId": snapshot_id,
             "repoId": repo_id,

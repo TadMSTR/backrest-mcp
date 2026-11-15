@@ -731,6 +731,51 @@ async def test_bad_ids_rejected_before_any_call(mcp_server, tool, args):
     assert route.call_count == 0
 
 
+@pytest.mark.parametrize(
+    "bad_path",
+    [
+        "../../etc",  # relative, with traversal
+        "etc/passwd",  # relative
+        "",  # empty
+        "/home/../etc",  # absolute, with a '..' segment
+        "/..",
+        "/home/x/..",
+        "/home/\x00/x",  # NUL
+        "/home/x\n/y",  # control character
+        "/home/x\x7f",  # DEL
+        "/" + "a" * 4096,  # over the length cap
+    ],
+)
+@pytest.mark.parametrize(
+    ("tool", "args", "field"),
+    [
+        ("list_snapshot_files", {"repo_id": REPO_ID, "snapshot_id": "abc"}, "path"),
+        ("get_download_url", {"operation_id": "1"}, "file_path"),
+    ],
+)
+async def test_bad_snapshot_paths_rejected_before_any_call(mcp_server, tool, args, field, bad_path):
+    """vikunja#3: in-snapshot paths are validated here, not left to Backrest."""
+    with respx.mock(assert_all_called=False) as mock:
+        route = mock.post(url__startswith=f"{BASE_URL}/v1.Backrest/")
+        result = await mcp_server.call_tool(tool, {**args, field: bad_path})
+    assert "error" in json.loads(result.content[0].text)
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "good_path", ["/", "/home/x", "/a/.hidden", "/a/b..c/d", "/a/./b", "/" + "a" * 4095]
+)
+async def test_valid_snapshot_paths_pass_through(mcp_server, good_path):
+    with respx.mock() as mock:
+        route = mock.post(f"{BASE_URL}/v1.Backrest/GetDownloadURL").mock(
+            return_value=httpx.Response(200, json={"value": "http://localhost:9898/download/a"})
+        )
+        await mcp_server.call_tool(
+            "get_download_url", {"operation_id": "1", "file_path": good_path}
+        )
+    assert json.loads(route.calls[0].request.content)["filePath"] == good_path
+
+
 def test_freshness_helpers(mcp_server):
     import time
 
