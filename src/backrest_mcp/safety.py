@@ -36,6 +36,30 @@ def validate_backrest_id(name: str, value: str) -> None:
         raise ValueError(f"Invalid {name}: {value!r} — must match ^[a-zA-Z0-9_.-]{{1,256}}$")
 
 
+# Longest in-snapshot path accepted (Linux PATH_MAX).
+_PATH_MAX = 4096
+
+
+def validate_snapshot_path(name: str, value: str) -> None:
+    """Validate a path inside a snapshot or restore output before it is sent to Backrest.
+
+    Accepted: an absolute path of at most 4096 characters with no ``..`` segment and no
+    ASCII control character (U+0000-U+001F or DEL, NUL included). C1 controls and the
+    Unicode line separators are not refused. Backrest is not relied on to refuse these.
+    The message never echoes the value: it may carry control characters.
+
+    Raises ValueError on the first rule that fails.
+    """
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError(f"Invalid {name}: must be an absolute path starting with '/'")
+    if len(value) > _PATH_MAX:
+        raise ValueError(f"Invalid {name}: longer than {_PATH_MAX} characters")
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in value):
+        raise ValueError(f"Invalid {name}: contains a control character")
+    if ".." in value.split("/"):
+        raise ValueError(f"Invalid {name}: contains a '..' segment")
+
+
 # Master read-only switch. When true, no mutating tools are registered.
 READONLY = os.getenv("BACKREST_READONLY", "true").lower() in ("1", "true", "yes")
 

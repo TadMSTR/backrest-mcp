@@ -37,7 +37,7 @@ def configure_logging() -> None:
     # ONE sink, not two. A stderr StreamHandler and a FileHandler were both
     # attached, so under PM2 every line was written to `error_file` *and* to
     # LOG_FILE — measured 2026-08-30 as two near-identical unrotated files,
-    # /home/ted/logs/backrest-mcp.log (8.5 MB) and
+    # ~/logs/backrest-mcp.log (8.5 MB) and
     # ~/.pm2/logs/backrest-mcp-error.log (9.5 MB), per-logger counts matching
     # within ~500 lines. Same shape as vikunja#574 P4 and #552. The file handler
     # wins when LOG_FILE is writable; stderr is the fallback, which is what keeps
@@ -67,7 +67,7 @@ def configure_logging() -> None:
 
     # Third-party wire trace is not this service's log. The root logger sits at
     # LOG_LEVEL, so httpx/httpcore/mcp/nats all inherited INFO and drowned the
-    # app's own lines. Measured in /home/ted/logs/backrest-mcp.log on 2026-08-30:
+    # app's own lines. Measured in ~/logs/backrest-mcp.log on 2026-08-30:
     # mcp.server.lowlevel.server 21,088; mcp.server.streamable_http_manager
     # 10,282; mcp.server.streamable_http 10,273; httpx 10,262 — against 6 lines
     # from __main__. Demote them to WARNING and leave the backrest_mcp logger at

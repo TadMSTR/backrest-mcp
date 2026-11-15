@@ -129,6 +129,8 @@ BACKREST_ALLOW_DESTRUCTIVE=true   # enables forget_snapshot, restore_snapshot
 
 `restore_snapshot` validates the `target` path against `BACKREST_RESTORE_ALLOWED_PREFIX` (default: `~/backrest-restore/`) using `os.path.realpath()`. Path traversal attempts are blocked. The prefix itself must be a real directory (not a symlink) owned by the server user, with mode 0700; otherwise the restore is refused. Create it with `mkdir -m 0700 ~/backrest-restore`. After verifying restored files, move them manually.
 
+In-snapshot paths (`list_snapshot_files` `path`, `get_download_url` `file_path`, `restore_snapshot` `path`) are checked before Backrest is called: each must be absolute, at most 4096 characters, with no `..` segment and no ASCII control character (U+0000–U+001F or DEL). Other Unicode controls are not refused.
+
 **5. Audit log**
 
 Set `BACKREST_AUDIT_LOG=/path/to/audit.jsonl` to log all write operations. Credential values are never included.
